@@ -1,0 +1,9 @@
+flask
+pandas
+numpy
+google-generativeai
+python-dotenv
+ultralytics
+opencv-python-headless
+pillow
+jinja2

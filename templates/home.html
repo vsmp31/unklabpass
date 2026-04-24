@@ -1,0 +1,191 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="page-grid">
+
+    <!-- ─── LEFT COLUMN : Camera only ───────────────────────────────────────── -->
+    <section class="panel panel-camera" id="panel-camera" aria-label="Camera Panel">
+
+        <!-- Live feed fills the card -->
+        <div class="camera-wrapper" id="camera-wrapper">
+            <video id="camera-feed" autoplay playsinline muted></video>
+            <canvas id="snapshot-canvas" style="display:none;"></canvas>
+            <div class="camera-overlay" id="camera-overlay">
+                <span class="camera-overlay-text">Kamera belum aktif</span>
+            </div>
+        </div>
+
+        <!-- Button row -->
+        <div class="cam-btns">
+            <button class="btn-primary" id="btn-start-camera">📷 Mulai Kamera</button>
+            <button class="btn-secondary" id="btn-capture" disabled>🖼 Ambil Foto</button>
+            <button class="btn-analyze" id="btn-analyze">🔍 Analisa Plat Dosen</button>
+        </div>
+
+        <!-- Spinner -->
+        <div class="spinner-wrap" id="spinner-wrap" style="display:none;">
+            <div class="spinner"></div>
+            <span>Menganalisa...</span>
+        </div>
+
+        <!-- Toast -->
+        <div class="toast" id="toast"></div>
+
+    </section>
+
+    <!-- ─── RIGHT COLUMN ─────────────────────────────────────────────────────── -->
+    <section class="panel" id="panel-info" aria-label="Info Panel">
+
+        <div class="info-card">
+            <div class="info-title">informasi kendaraan</div>
+
+            <div class="capture-box" id="capture-box">
+                {% if detected %}
+                    <div class="success-badge">✓ Terdeteksi</div>
+                    <div class="plate-number">{{ detected.plate }}</div>
+                {% else %}
+                    <div class="waiting-text">
+                        Menunggu hasil analisa...<br>
+                        <span style="font-size:0.9rem;opacity:0.6;">Silakan aktifkan kamera dan ambil foto</span>
+                    </div>
+                {% endif %}
+            </div>
+
+            <div class="info-rows">
+                <div class="info-row">
+                    nomor plat
+                    <span class="info-val" id="val-plate">{{ detected.plate if detected else '—' }}</span>
+                </div>
+                <div class="info-row">
+                    merek kendaraan
+                    <span class="info-val" id="val-dept">{{ detected.department if detected else '—' }}</span>
+                </div>
+                <div class="info-row">
+                    pemilik kendaraan
+                    <span class="info-val" id="val-name">{{ detected.name if detected else '—' }}</span>
+                </div>
+                <div class="info-row">
+                    waktu scan
+                    <span class="info-val" id="val-time">{{ scan_time }}</span>
+                </div>
+                <div class="info-row">
+                    akurasi ketepatan
+                    <span class="info-val" id="val-acc">{{ akurasi }}</span>
+                </div>
+            </div>
+        </div>
+
+    </section>
+
+</div>
+
+<script>
+/* ─── Camera ──────────────────────────────────────────────────────────────── */
+const video      = document.getElementById('camera-feed');
+const canvas     = document.getElementById('snapshot-canvas');
+const overlay    = document.getElementById('camera-overlay');
+const btnStart   = document.getElementById('btn-start-camera');
+const btnCapture = document.getElementById('btn-capture');
+const btnAnalyze = document.getElementById('btn-analyze');
+const spinnerWrap= document.getElementById('spinner-wrap');
+const toast      = document.getElementById('toast');
+const captureBox = document.getElementById('capture-box');
+
+let capturedData = null;
+let cameraStream = null;
+let isRunning    = false;
+
+// Toggle camera on/off
+btnStart.addEventListener('click', async () => {
+    if (isRunning) {
+        stopCamera();
+    } else {
+        await startCamera();
+    }
+});
+
+async function startCamera() {
+    try {
+        cameraStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+        video.srcObject = cameraStream;
+        overlay.style.display  = 'none';
+        btnCapture.disabled    = false;
+        btnStart.textContent   = '⏹ Hentikan Kamera';
+        btnStart.classList.replace('btn-primary', 'btn-stop');
+        isRunning = true;
+    } catch (err) {
+        showToast('❌ Gagal mengakses kamera: ' + err.message, 'error');
+    }
+}
+
+function stopCamera() {
+    if (cameraStream) cameraStream.getTracks().forEach(t => t.stop());
+    cameraStream = null;
+    video.srcObject        = null;
+    overlay.style.display  = 'flex';
+    btnCapture.disabled    = true;
+    btnStart.textContent   = '📷 Mulai Kamera';
+    btnStart.classList.replace('btn-stop', 'btn-primary');
+    isRunning = false;
+}
+
+// Capture frame from live video
+btnCapture.addEventListener('click', () => {
+    const ctx = canvas.getContext('2d');
+    canvas.width  = video.videoWidth  || 640;
+    canvas.height = video.videoHeight || 480;
+    ctx.drawImage(video, 0, 0);
+    capturedData = canvas.toDataURL('image/jpeg', 0.9);
+    showToast('✅ Foto berhasil diambil!', 'success');
+});
+
+// Analyze via AJAX
+btnAnalyze.addEventListener('click', async () => {
+    if (!capturedData) {
+        showToast('⚠️ Ambil foto terlebih dahulu!', 'warning');
+        return;
+    }
+    btnAnalyze.disabled       = true;
+    spinnerWrap.style.display = 'flex';
+
+    try {
+        const resp = await fetch('/analyze', {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body:    JSON.stringify({ image: capturedData }),
+        });
+        const data = await resp.json();
+        if (data.success) {
+            updateInfoCard(data);
+            showToast('✅ Analisa selesai!', 'success');
+        } else {
+            showToast('❌ Error: ' + data.error, 'error');
+        }
+    } catch {
+        showToast('❌ Gagal menghubungi server.', 'error');
+    } finally {
+        btnAnalyze.disabled       = false;
+        spinnerWrap.style.display = 'none';
+    }
+});
+
+/* ─── Helpers ─────────────────────────────────────────────────────────────── */
+function updateInfoCard(data) {
+    captureBox.innerHTML = `
+        <div class="success-badge">✓ Terdeteksi</div>
+        <div class="plate-number">${data.plate}</div>`;
+    document.getElementById('val-plate').textContent = data.plate      || '—';
+    document.getElementById('val-dept').textContent  = data.department || '—';
+    document.getElementById('val-name').textContent  = data.name       || '—';
+    document.getElementById('val-time').textContent  = data.scan_time  || '—';
+    document.getElementById('val-acc').textContent   = data.accuracy   || '—';
+}
+
+function showToast(msg, type = 'info') {
+    toast.textContent = msg;
+    toast.className   = `toast toast-${type} show`;
+    setTimeout(() => toast.classList.remove('show'), 3000);
+}
+</script>
+
+{% endblock %}

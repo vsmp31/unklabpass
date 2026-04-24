@@ -1,0 +1,519 @@
+@import url('https://fonts.googleapis.com/css2?family=Irish+Grover&family=Jaro:opsz@6..72&display=swap');
+@import url('https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css');
+
+/* ─── Design Tokens ─────────────────────────────────────────────────────── */
+:root {
+    --ink:    #ffffff;
+    --panel:  rgba(23, 23, 23, 0.84);
+    --inner:  rgba(47, 47, 47, 0.84);
+    --line:   rgba(255, 255, 255, 0.08);
+    --blue:   #3b9ccf;
+    --blue-2: #2a7ba8;
+    --green:  #00c853;
+}
+
+/* ─── Reset ─────────────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+    height: 100%;
+    font-family: 'Irish Grover', serif;
+    color: var(--ink);
+    overflow: hidden;
+}
+
+/* ─── Background ────────────────────────────────────────────────────────── */
+body {
+    background: #2a2a2a;
+}
+
+body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image: url('/static/images/unklab.jpg');
+    background-size: cover;
+    background-position: center;
+    opacity: 0.35;
+    z-index: -1;
+    pointer-events: none;
+}
+
+body::after {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background: rgba(30, 34, 42, 0.55);
+    z-index: 0;
+    pointer-events: none;
+}
+
+/* ─── Navbar ────────────────────────────────────────────────────────────── */
+.up-nav {
+    position: relative;
+    z-index: 10;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.5rem 1.6rem 0.6rem;
+}
+
+.up-brand {
+    display: flex;
+    align-items: center;
+    gap: 0.8rem;
+}
+
+.up-logo {
+    width: 64px;
+    height: 56px;
+    object-fit: contain;
+}
+
+.up-brand-name {
+    color: var(--ink);
+    font-size: 2rem;
+    letter-spacing: 0.12em;
+    line-height: 1;
+}
+
+.up-nav-links {
+    display: flex;
+    gap: 2rem;
+    align-items: center;
+}
+
+.up-nav-link {
+    color: #ffffff;
+    text-decoration: none;
+    font-size: 1.1rem;
+    letter-spacing: 0.06em;
+    line-height: 1;
+    transition: color 0.3s ease;
+    font-weight: 400;
+}
+
+.up-nav-link:hover  { color: var(--blue); }
+.up-nav-link.active { color: var(--blue); }
+
+/* ─── Main Layout ───────────────────────────────────────────────────────── */
+.main-content {
+    position: relative;
+    z-index: 3;
+    height: calc(100vh - 72px);
+    padding: 0 1.6rem 0.9rem;
+    overflow: hidden;
+}
+
+/* ─── Two-column grid ───────────────────────────────────────────────────── */
+.page-grid {
+    display: grid;
+    grid-template-columns: 1.5fr 1fr;
+    gap: 1.2rem;
+    height: 100%;
+}
+
+/* ─── Panel (shared card style) ────────────────────────────────────────── */
+.panel {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 20px;
+    padding: 1.2rem;
+    backdrop-filter: blur(8px);
+    display: flex;
+    flex-direction: column;
+    gap: 0.8rem;
+    overflow-y: auto;
+    overflow-x: hidden;
+    height: 100%;
+}
+
+/* Left panel — camera fills it, no scroll */
+.panel-camera {
+    overflow: hidden;
+}
+
+/* ─── Scrollbar ─────────────────────────────────────────────────────────── */
+::-webkit-scrollbar           { width: 6px; height: 6px; }
+::-webkit-scrollbar-track     { background: rgba(0,0,0,0.2); border-radius: 4px; }
+::-webkit-scrollbar-thumb     { background: rgba(59,156,207,0.5); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(59,156,207,0.7); }
+
+/* ─── Section labels ────────────────────────────────────────────────────── */
+.section-title {
+    color: var(--ink);
+    font-size: 1.4rem;
+    letter-spacing: 0.08em;
+    text-align: center;
+    flex-shrink: 0;
+}
+
+.section-subtitle {
+    color: rgba(255,255,255,0.6);
+    font-size: 0.95rem;
+    letter-spacing: 0.05em;
+    text-align: center;
+    margin-bottom: 0.2rem;
+    flex-shrink: 0;
+}
+
+/* ─── Camera ────────────────────────────────────────────────────────────── */
+.camera-wrapper {
+    position: relative;
+    width: 100%;
+    flex: 1;
+    min-height: 0;
+    background: #000;
+    border-radius: 12px;
+    border: 1px solid var(--line);
+    overflow: hidden;
+}
+
+#camera-feed {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
+.camera-overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0,0,0,0.5);
+}
+
+.camera-overlay-text {
+    color: rgba(255,255,255,0.5);
+    font-size: 1rem;
+    letter-spacing: 0.06em;
+}
+
+/* ─── Camera button row ─────────────────────────────────────────────────── */
+.cam-btns {
+    display: flex;
+    gap: 0.7rem;
+    flex-shrink: 0;
+}
+
+.cam-btns .btn-primary,
+.cam-btns .btn-stop,
+.cam-btns .btn-secondary {
+    flex: 1;
+}
+
+.cam-btns .btn-analyze {
+    flex: 1.5;
+    min-height: 48px;
+    margin-top: 0;
+}
+
+/* ─── Buttons ───────────────────────────────────────────────────────────── */
+.btn-primary, .btn-secondary, .btn-analyze, .btn-stop {
+    width: 100%;
+    min-height: 44px;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    font-family: 'Irish Grover', serif;
+    font-size: 1rem;
+    letter-spacing: 0.06em;
+    color: var(--ink);
+    cursor: pointer;
+    transition: all 0.3s ease;
+    padding: 0.5rem 1rem;
+}
+
+.btn-primary {
+    background: linear-gradient(135deg, var(--blue) 0%, var(--blue-2) 100%);
+    box-shadow: 0 4px 12px rgba(59,156,207,0.3);
+}
+.btn-primary:hover {
+    background: linear-gradient(135deg, #4aacdf 0%, #3a8bb8 100%);
+    box-shadow: 0 6px 16px rgba(59,156,207,0.5);
+    transform: translateY(-1px);
+}
+
+.btn-stop {
+    background: linear-gradient(135deg, #cf3b3b 0%, #a82a2a 100%);
+    box-shadow: 0 4px 12px rgba(207,59,59,0.3);
+}
+
+.btn-secondary {
+    background: var(--inner);
+}
+.btn-secondary:hover:not(:disabled) {
+    background: rgba(59,156,207,0.15);
+    border-color: rgba(59,156,207,0.4);
+    transform: translateY(-1px);
+}
+.btn-secondary:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+.btn-analyze {
+    background: linear-gradient(135deg, var(--blue) 0%, var(--blue-2) 100%);
+    box-shadow: 0 4px 12px rgba(59,156,207,0.3);
+    font-size: 1.1rem;
+    min-height: 50px;
+    margin-top: auto;
+}
+.btn-analyze:hover:not(:disabled) {
+    box-shadow: 0 6px 20px rgba(59,156,207,0.55);
+    transform: translateY(-2px);
+}
+.btn-analyze:disabled { opacity: 0.5; cursor: not-allowed; }
+
+
+
+/* ─── Spinner ───────────────────────────────────────────────────────────── */
+.spinner-wrap {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    color: rgba(255,255,255,0.7);
+    font-size: 0.9rem;
+    letter-spacing: 0.04em;
+    justify-content: center;
+}
+
+.spinner {
+    width: 18px;
+    height: 18px;
+    border: 2px solid rgba(255,255,255,0.2);
+    border-top-color: var(--blue);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ─── Toast ─────────────────────────────────────────────────────────────── */
+.toast {
+    border-radius: 10px;
+    font-size: 0.9rem;
+    letter-spacing: 0.04em;
+    padding: 0.5rem 0.8rem;
+    text-align: center;
+    opacity: 0;
+    transition: opacity 0.3s ease;
+    min-height: 0;
+    max-height: 0;
+    overflow: hidden;
+    transition: all 0.3s ease;
+}
+
+.toast.show {
+    opacity: 1;
+    max-height: 60px;
+    background: rgba(0,0,0,0.4);
+    border: 1px solid var(--line);
+}
+
+.toast.toast-success { color: #4caf50; border-color: rgba(76,175,80,0.3) !important; }
+.toast.toast-error   { color: #f44336; border-color: rgba(244,67,54,0.3) !important; }
+.toast.toast-warning { color: #ff9800; border-color: rgba(255,152,0,0.3) !important; }
+
+/* ─── Info Card (right panel) ───────────────────────────────────────────── */
+.info-card {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    height: 100%;
+}
+
+.info-title {
+    font-size: 1.5rem;
+    color: var(--ink);
+    letter-spacing: 0.08em;
+    text-align: center;
+    padding-bottom: 0.8rem;
+    border-bottom: 1px solid var(--line);
+    flex-shrink: 0;
+}
+
+.capture-box {
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: rgba(0,0,0,0.3);
+    color: var(--ink);
+    flex: 1;
+    min-height: 200px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    font-size: 1.2rem;
+    line-height: 1.5;
+    letter-spacing: 0.06em;
+    padding: 1.5rem;
+    gap: 0.8rem;
+    transition: all 0.4s ease;
+}
+
+.success-badge {
+    background: linear-gradient(135deg, var(--green) 0%, #00a843 100%);
+    color: #fff;
+    padding: 0.5rem 1.2rem;
+    border-radius: 8px;
+    font-size: 1rem;
+    letter-spacing: 0.08em;
+    box-shadow: 0 4px 12px rgba(0,200,83,0.3);
+    animation: popIn 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+@keyframes popIn {
+    from { transform: scale(0.7); opacity: 0; }
+    to   { transform: scale(1);   opacity: 1; }
+}
+
+.plate-number {
+    font-size: 1.8rem;
+    font-weight: bold;
+    color: var(--blue);
+    letter-spacing: 0.15em;
+    text-shadow: 0 2px 8px rgba(59,156,207,0.5);
+    animation: popIn 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) 0.1s both;
+}
+
+.waiting-text {
+    color: rgba(255,255,255,0.6);
+    font-size: 1.1rem;
+    line-height: 1.6;
+}
+
+.info-rows {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+    flex-shrink: 0;
+}
+
+.info-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.8rem 1rem;
+    background: rgba(0,0,0,0.2);
+    border-radius: 10px;
+    border: 1px solid var(--line);
+    color: var(--ink);
+    font-size: 1rem;
+    letter-spacing: 0.06em;
+    transition: all 0.3s ease;
+}
+
+.info-row:hover {
+    background: rgba(59,156,207,0.1);
+    border-color: rgba(59,156,207,0.3);
+    transform: translateX(4px);
+}
+
+.info-val {
+    color: var(--blue);
+    font-weight: 500;
+    max-width: 55%;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-size: 0.95rem;
+    text-align: right;
+}
+
+/* ─── About Page ────────────────────────────────────────────────────────── */
+.about-shell {
+    max-width: 820px;
+    margin: 2rem auto;
+    padding: 2rem;
+    border-radius: 20px;
+    border: 1px solid var(--line);
+    background: var(--panel);
+    backdrop-filter: blur(8px);
+    position: relative;
+    z-index: 3;
+}
+
+.about-title {
+    color: var(--ink);
+    margin-bottom: 1rem;
+    font-size: 2.3rem;
+    letter-spacing: 0.1em;
+}
+
+.about-body {
+    color: rgba(255,255,255,0.8);
+    line-height: 1.86;
+    font-size: 1.1rem;
+    letter-spacing: 0.04em;
+    margin-bottom: 2rem;
+}
+
+.about-features {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1rem;
+    margin-top: 1.5rem;
+}
+
+.feature-card {
+    background: rgba(0,0,0,0.3);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 1.2rem;
+    text-align: center;
+    transition: all 0.3s ease;
+}
+
+.feature-card:hover {
+    border-color: rgba(59,156,207,0.4);
+    background: rgba(59,156,207,0.08);
+    transform: translateY(-4px);
+}
+
+.feature-icon {
+    font-size: 2rem;
+    display: block;
+    margin-bottom: 0.6rem;
+}
+
+.feature-card h3 {
+    color: var(--ink);
+    font-size: 1.1rem;
+    letter-spacing: 0.06em;
+    margin-bottom: 0.5rem;
+}
+
+.feature-card p {
+    color: rgba(255,255,255,0.6);
+    font-size: 0.9rem;
+    line-height: 1.5;
+    letter-spacing: 0.03em;
+}
+
+/* ─── Responsive ────────────────────────────────────────────────────────── */
+@media (max-width: 980px) {
+    html, body { overflow: auto; }
+
+    .main-content { height: auto; overflow: visible; }
+
+    .page-grid {
+        grid-template-columns: 1fr;
+        height: auto;
+    }
+
+    .panel { height: auto; }
+
+    .up-brand-name { font-size: 1.5rem; }
+    .up-logo       { width: 48px; height: 42px; }
+    .up-nav-link   { font-size: 1rem; }
+
+    .cam-btns       { flex-direction: column; }
+
+    .about-features { grid-template-columns: 1fr; }
+}
+
+/* ─── Link reset ────────────────────────────────────────────────────────── */
+a, a:hover, a:active, a:visited, a:focus { text-decoration: none; }

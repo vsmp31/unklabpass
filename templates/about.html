@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block content %}
+
+<section class="about-shell">
+    <h1 class="about-title">Tentang UnklabPass</h1>
+    <p class="about-body">
+        UnklabPass adalah sistem identifikasi kendaraan berbasis AI untuk Universitas Klabat.<br><br>
+        Menggunakan Computer Vision dan OCR untuk mendeteksi plat nomor secara real-time
+        dan mencocokkannya dengan database dosen yang terdaftar.<br><br>
+        <em style="opacity:0.55;">Halaman ini masih dalam pengembangan.</em>
+    </p>
+
+    <div class="about-features">
+        <div class="feature-card">
+            <span class="feature-icon">🎯</span>
+            <h3>Real-time Detection</h3>
+            <p>Deteksi plat nomor secara langsung menggunakan kamera perangkat.</p>
+        </div>
+        <div class="feature-card">
+            <span class="feature-icon">🧠</span>
+            <h3>AI-Powered</h3>
+            <p>Didukung model YOLO dan OCR untuk akurasi pengenalan plat nomor yang tinggi.</p>
+        </div>
+        <div class="feature-card">
+            <span class="feature-icon">🗄️</span>
+            <h3>Database Dosen</h3>
+            <p>Pencocokan otomatis dengan database kendaraan dosen terdaftar.</p>
+        </div>
+    </div>
+</section>
+
+{% endblock %}
