@@ -1,18 +1,37 @@
 from flask import Flask, render_template, request, jsonify, session
-import json
-import random
+import sqlite3
 import time
 import os
+import glob
+import logging
+
+from plate_detector import analyze_frame
+
+logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
 
 app = Flask(__name__)
 app.secret_key = "scanvec-unklabpass-2026"
 
-DATA_PATH = os.path.join(os.path.dirname(__file__), "data", "lecturers.json")
+# ─── Auto-reload & cache config ───────────────────────────────────────────────
+app.config["TEMPLATES_AUTO_RELOAD"]    = True
+app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
+
+@app.after_request
+def no_cache(response):
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"]        = "no-cache"
+    response.headers["Expires"]       = "0"
+    return response
+
+DB_PATH = os.path.join(os.path.dirname(__file__), "data", "vehicles.db")
 
 
-def load_lecturers():
-    with open(DATA_PATH, encoding="utf-8") as f:
-        return json.load(f)
+def load_vehicles():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute("SELECT plat_nomor, nama_pemilik FROM vehicles").fetchall()
+    conn.close()
+    return [{"plate": r["plat_nomor"], "name": r["nama_pemilik"]} for r in rows]
 
 
 # ─── Pages ────────────────────────────────────────────────────────────────────
@@ -38,25 +57,40 @@ def about():
 @app.route("/analyze", methods=["POST"])
 def analyze():
     try:
-        lecturers = load_lecturers()
-        detected  = random.choice(lecturers)
+        data      = request.get_json(force=True)
+        b64_image = data.get("image", "")
+        if not b64_image:
+            return jsonify({"success": False, "error": "No image data received"}), 400
+
+        vehicles  = load_vehicles()
         scan_time = time.strftime("%Y-%m-%d %H:%M:%S")
-        akurasi   = random.randint(88, 99)
 
-        session["detected"]  = detected
-        session["scan_time"] = scan_time
-        session["akurasi"]   = f"{akurasi}%"
+        result = analyze_frame(b64_image, vehicles)
 
-        return jsonify({
+        base = {
             "success":    True,
-            "plate":      detected["plate"],
-            "name":       detected["name"],
-            "department": detected.get("department", "—"),
+            "found":      result["found"],
+            "registered": result["registered"],
+            "plate":      result["plate"],
             "scan_time":  scan_time,
-            "accuracy":   f"{akurasi}%",
-        })
+            "boxes":      result["boxes"],
+            "frame_size": result["frame_size"],
+        }
+
+        if result["registered"] and result["lecturer"]:
+            vehicle = result["lecturer"]
+            session["detected"]  = vehicle
+            session["scan_time"] = scan_time
+            base.update({
+                "name": vehicle.get("name", "—"),
+            })
+
+        return jsonify(base)
+
     except Exception as e:
+        logging.exception("Error in /analyze")
         return jsonify({"success": False, "error": str(e)}), 500
+
 
 
 @app.route("/clear", methods=["POST"])
@@ -68,4 +102,16 @@ def clear():
 # ─── Run ──────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    app.run(debug=True, port=5000, host="0.0.0.0")
+    # Collect all templates & static files so Flask reloader watches them too
+    BASE = os.path.dirname(__file__)
+    extra_files = (
+        glob.glob(os.path.join(BASE, "templates", "**", "*"), recursive=True) +
+        glob.glob(os.path.join(BASE, "static",    "**", "*"), recursive=True)
+    )
+    app.run(
+        debug=True,
+        port=5000,
+        host="0.0.0.0",
+        use_reloader=True,
+        extra_files=extra_files,
+    )

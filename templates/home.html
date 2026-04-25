@@ -3,39 +3,38 @@
 
 <div class="page-grid">
 
-    <!-- ─── LEFT COLUMN : Camera only ───────────────────────────────────────── -->
+    <!-- LEFT: Camera + Terminal -->
     <section class="panel panel-camera" id="panel-camera" aria-label="Camera Panel">
 
-        <!-- Live feed fills the card -->
         <div class="camera-wrapper" id="camera-wrapper">
             <video id="camera-feed" autoplay playsinline muted></video>
+            <canvas id="box-canvas" class="box-canvas"></canvas>
             <canvas id="snapshot-canvas" style="display:none;"></canvas>
             <div class="camera-overlay" id="camera-overlay">
                 <span class="camera-overlay-text">Kamera belum aktif</span>
             </div>
         </div>
 
-        <!-- Button row -->
-        <div class="cam-btns">
-            <button class="btn-primary" id="btn-start-camera">📷 Mulai Kamera</button>
-            <button class="btn-secondary" id="btn-capture" disabled>🖼 Ambil Foto</button>
-            <button class="btn-analyze" id="btn-analyze">🔍 Analisa Plat Dosen</button>
+        <div class="live-terminal" id="live-terminal">
+            <div class="terminal-header">
+                <span class="term-dot red"></span>
+                <span class="term-dot yellow"></span>
+                <span class="term-dot green"></span>
+                &nbsp; Live Scan Logs
+                <span class="term-status" id="term-status">● IDLE</span>
+            </div>
+            <div class="terminal-content" id="terminal-content">
+                <div class="log-line info">
+                    <span class="log-time">[--:--:--]</span>
+                    <span class="log-badge nfo">[SYS]</span> YOLOv8 + EasyOCR loaded at startup.
+                </div>
+            </div>
         </div>
-
-        <!-- Spinner -->
-        <div class="spinner-wrap" id="spinner-wrap" style="display:none;">
-            <div class="spinner"></div>
-            <span>Menganalisa...</span>
-        </div>
-
-        <!-- Toast -->
-        <div class="toast" id="toast"></div>
 
     </section>
 
-    <!-- ─── RIGHT COLUMN ─────────────────────────────────────────────────────── -->
+    <!-- RIGHT: Info -->
     <section class="panel" id="panel-info" aria-label="Info Panel">
-
         <div class="info-card">
             <div class="info-title">informasi kendaraan</div>
 
@@ -46,7 +45,7 @@
                 {% else %}
                     <div class="waiting-text">
                         Menunggu hasil analisa...<br>
-                        <span style="font-size:0.9rem;opacity:0.6;">Silakan aktifkan kamera dan ambil foto</span>
+                        <span style="font-size:0.9rem;opacity:0.6;">Kamera aktif otomatis</span>
                     </div>
                 {% endif %}
             </div>
@@ -55,10 +54,6 @@
                 <div class="info-row">
                     nomor plat
                     <span class="info-val" id="val-plate">{{ detected.plate if detected else '—' }}</span>
-                </div>
-                <div class="info-row">
-                    merek kendaraan
-                    <span class="info-val" id="val-dept">{{ detected.department if detected else '—' }}</span>
                 </div>
                 <div class="info-row">
                     pemilik kendaraan
@@ -74,117 +69,224 @@
                 </div>
             </div>
         </div>
-
     </section>
 
 </div>
 
 <script>
-/* ─── Camera ──────────────────────────────────────────────────────────────── */
-const video      = document.getElementById('camera-feed');
-const canvas     = document.getElementById('snapshot-canvas');
-const overlay    = document.getElementById('camera-overlay');
-const btnStart   = document.getElementById('btn-start-camera');
-const btnCapture = document.getElementById('btn-capture');
-const btnAnalyze = document.getElementById('btn-analyze');
-const spinnerWrap= document.getElementById('spinner-wrap');
-const toast      = document.getElementById('toast');
-const captureBox = document.getElementById('capture-box');
+/* ═══ refs ═══════════════════════════════════════════════════════════════════ */
+const video       = document.getElementById('camera-feed');
+const boxCanvas   = document.getElementById('box-canvas');
+const snapCanvas  = document.getElementById('snapshot-canvas');
+const overlay     = document.getElementById('camera-overlay');
+const captureBox  = document.getElementById('capture-box');
+const termContent = document.getElementById('terminal-content');
+const termStatus  = document.getElementById('term-status');
+const bCtx        = boxCanvas.getContext('2d');
 
-let capturedData = null;
 let cameraStream = null;
 let isRunning    = false;
+let isAnalyzing  = false;
 
-// Toggle camera on/off
-btnStart.addEventListener('click', async () => {
+/* ═══ 20-color YOLO palette ══════════════════════════════════════════════════ */
+const PALETTE = [
+    '#ff4d4d','#ff9900','#ffee00','#33ff33','#00cfff',
+    '#a64dff','#ff66cc','#00ffcc','#ff6633','#66ff66',
+    '#ff3399','#33ccff','#ffaa00','#66ffcc','#ff6699',
+    '#33ff99','#cc44ff','#ff8844','#44ffdd','#ff4488',
+];
+const classColor = id => PALETTE[Math.abs(id ?? 0) % PALETTE.length];
+
+/* ═══ Canvas helpers ═════════════════════════════════════════════════════════ */
+function fitCanvas() {
+    const r = video.getBoundingClientRect();
+    if (r.width > 0 && r.height > 0) {
+        boxCanvas.width  = Math.round(r.width);
+        boxCanvas.height = Math.round(r.height);
+    }
+}
+
+/* Maps raw-frame coords to display coords under object-fit:cover */
+function toDisp(fx, fy, fw, fh, FW, FH) {
+    const dw = boxCanvas.width, dh = boxCanvas.height;
+    const sc = Math.max(dw / FW, dh / FH);
+    const ox = (dw - FW * sc) / 2, oy = (dh - FH * sc) / 2;
+    return { x: fx*sc+ox, y: fy*sc+oy, w: fw*sc, h: fh*sc };
+}
+
+
+
+/* ═══ Camera ════════════════════════════════════════════════════════════════ */
+window.addEventListener('DOMContentLoaded', async () => {
+    await startCamera();
     if (isRunning) {
-        stopCamera();
-    } else {
-        await startCamera();
+        addLog('Camera active. YOLOv8 object detection ready.', 'info');
+        addLog('Detecting all objects every 3s...', 'info');
+        setStatus('● SCANNING', 'active');
+        setInterval(performScan, 3000);
     }
 });
 
 async function startCamera() {
     try {
-        cameraStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
-        video.srcObject = cameraStream;
-        overlay.style.display  = 'none';
-        btnCapture.disabled    = false;
-        btnStart.textContent   = '⏹ Hentikan Kamera';
-        btnStart.classList.replace('btn-primary', 'btn-stop');
-        isRunning = true;
+        cameraStream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }
+        });
+        video.srcObject       = cameraStream;
+        overlay.style.display = 'none';
+        isRunning             = true;
+        video.addEventListener('loadedmetadata', fitCanvas);
+        window.addEventListener('resize', fitCanvas);
     } catch (err) {
-        showToast('❌ Gagal mengakses kamera: ' + err.message, 'error');
+        addLog('Kamera error: ' + err.message, 'error');
+        overlay.querySelector('.camera-overlay-text').textContent = '⚠ Kamera tidak tersedia';
     }
 }
 
-function stopCamera() {
-    if (cameraStream) cameraStream.getTracks().forEach(t => t.stop());
-    cameraStream = null;
-    video.srcObject        = null;
-    overlay.style.display  = 'flex';
-    btnCapture.disabled    = true;
-    btnStart.textContent   = '📷 Mulai Kamera';
-    btnStart.classList.replace('btn-stop', 'btn-primary');
-    isRunning = false;
-}
+/* ═══ Scan loop ═════════════════════════════════════════════════════════════ */
+async function performScan() {
+    if (!isRunning || isAnalyzing) return;
+    isAnalyzing = true;
+    setStatus('● PROCESSING', 'processing');
 
-// Capture frame from live video
-btnCapture.addEventListener('click', () => {
-    const ctx = canvas.getContext('2d');
-    canvas.width  = video.videoWidth  || 640;
-    canvas.height = video.videoHeight || 480;
+    const vw = video.videoWidth  || 1280;
+    const vh = video.videoHeight || 720;
+    const ctx = snapCanvas.getContext('2d');
+    snapCanvas.width = vw; snapCanvas.height = vh;
     ctx.drawImage(video, 0, 0);
-    capturedData = canvas.toDataURL('image/jpeg', 0.9);
-    showToast('✅ Foto berhasil diambil!', 'success');
-});
-
-// Analyze via AJAX
-btnAnalyze.addEventListener('click', async () => {
-    if (!capturedData) {
-        showToast('⚠️ Ambil foto terlebih dahulu!', 'warning');
-        return;
-    }
-    btnAnalyze.disabled       = true;
-    spinnerWrap.style.display = 'flex';
 
     try {
         const resp = await fetch('/analyze', {
-            method:  'POST',
+            method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body:    JSON.stringify({ image: capturedData }),
+            body: JSON.stringify({ image: snapCanvas.toDataURL('image/jpeg', 0.85) }),
         });
         const data = await resp.json();
-        if (data.success) {
-            updateInfoCard(data);
-            showToast('✅ Analisa selesai!', 'success');
-        } else {
-            showToast('❌ Error: ' + data.error, 'error');
-        }
-    } catch {
-        showToast('❌ Gagal menghubungi server.', 'error');
-    } finally {
-        btnAnalyze.disabled       = false;
-        spinnerWrap.style.display = 'none';
-    }
-});
 
-/* ─── Helpers ─────────────────────────────────────────────────────────────── */
+        if (!data.success) {
+            addLog('Server: ' + (data.error || '?'), 'error');
+            setStatus('● ERROR', 'error-status');
+            bCtx.clearRect(0, 0, boxCanvas.width, boxCanvas.height);
+            return;
+        }
+
+        const FW    = data.frame_size?.[0] || vw;
+        const FH    = data.frame_size?.[1] || vh;
+        const boxes = data.boxes || [];
+
+        /* Always redraw — boxes or corners */
+        if (boxes.length > 0) {
+            drawBoxes(boxes, FW, FH);
+            /* Restore corners after 3s */
+            setTimeout(drawCorners, 3000);
+        } else {
+            drawCorners();
+        }
+
+        if (data.registered && data.plate) {
+            addLog(`Plate <b>${data.plate}</b> — ${data.name || ''}`, 'registered');
+            updateInfoCard(data);
+            setStatus('● TERDAFTAR', 'active');
+        } else if (boxes.length > 0) {
+            const cls = [...new Set(boxes.map(b => b.class_name))].slice(0, 5).join(', ');
+            addLog(`${boxes.length} obj: ${cls}`, 'info');
+            setStatus('● SCANNING', 'active');
+        } else {
+            addLog('No objects detected.', 'info');
+            setStatus('● SCANNING', 'active');
+        }
+
+    } catch (err) {
+        addLog('Network error: ' + err.message, 'error');
+        setStatus('● ERROR', 'error-status');
+        drawCorners();
+    } finally {
+        isAnalyzing = false;
+    }
+}
+
+/* ═══ Draw YOLO-style colored boxes ════════════════════════════════════════ */
+function drawBoxes(boxes, FW, FH) {
+    fitCanvas();
+    bCtx.clearRect(0, 0, boxCanvas.width, boxCanvas.height);
+
+    for (const box of boxes) {
+        const d     = toDisp(box.x, box.y, box.w, box.h, FW, FH);
+        const color = box.is_registered ? '#00e676' : classColor(box.class_id);
+
+        /* Transparent fill */
+        bCtx.fillStyle = color + '22';
+        bCtx.fillRect(d.x, d.y, d.w, d.h);
+
+        /* Glowing border */
+        bCtx.shadowColor = color + 'bb';
+        bCtx.shadowBlur  = 10;
+        bCtx.strokeStyle = color;
+        bCtx.lineWidth   = 2.5;
+        bCtx.strokeRect(d.x, d.y, d.w, d.h);
+        bCtx.shadowBlur  = 0;
+
+        /* Label pill */
+        const label = box.is_registered ? `✔ TERDAFTAR  ${box.label}` : box.label;
+        const fs    = Math.max(10, Math.min(13, d.w / 8));
+        bCtx.font   = `bold ${fs}px Consolas, monospace`;
+        const tw    = bCtx.measureText(label).width;
+        const lh    = fs + 8;
+        const lx    = d.x;
+        const ly    = (d.y - lh - 2) < 0 ? d.y + 2 : d.y - lh - 2;
+
+        bCtx.fillStyle = color;
+        pill(lx, ly, tw + 14, lh, 3);
+        bCtx.fill();
+
+        bCtx.fillStyle = '#000';
+        bCtx.fillText(label, lx + 7, ly + fs + 1);
+    }
+}
+
+function pill(x, y, w, h, r) {
+    bCtx.beginPath();
+    bCtx.moveTo(x+r,y); bCtx.lineTo(x+w-r,y);
+    bCtx.quadraticCurveTo(x+w,y,x+w,y+r);
+    bCtx.lineTo(x+w,y+h-r);
+    bCtx.quadraticCurveTo(x+w,y+h,x+w-r,y+h);
+    bCtx.lineTo(x+r,y+h);
+    bCtx.quadraticCurveTo(x,y+h,x,y+h-r);
+    bCtx.lineTo(x,y+r);
+    bCtx.quadraticCurveTo(x,y,x+r,y);
+    bCtx.closePath();
+}
+
+/* ═══ Terminal ══════════════════════════════════════════════════════════════ */
+function addLog(msg, type = 'info') {
+    const t   = new Date().toLocaleTimeString('id-ID', { hour12: false });
+    const div = document.createElement('div');
+    div.className = `log-line ${type}`;
+    const badge = {
+        registered:   '<span class="log-badge reg">[TERDAFTAR]</span>',
+        unregistered: '<span class="log-badge unreg">[TIDAK TERDAFTAR]</span>',
+        error:        '<span class="log-badge err">[ERROR]</span>',
+        info:         '<span class="log-badge nfo">[INFO]</span>',
+    }[type] || '';
+    div.innerHTML = `<span class="log-time">[${t}]</span> ${badge} ${msg}`;
+    termContent.appendChild(div);
+    termContent.scrollTop = termContent.scrollHeight;
+    while (termContent.children.length > 30) termContent.removeChild(termContent.firstChild);
+}
+
+function setStatus(t, cls) {
+    termStatus.textContent = t;
+    termStatus.className   = `term-status ${cls}`;
+}
+
 function updateInfoCard(data) {
     captureBox.innerHTML = `
         <div class="success-badge">✓ Terdeteksi</div>
         <div class="plate-number">${data.plate}</div>`;
-    document.getElementById('val-plate').textContent = data.plate      || '—';
-    document.getElementById('val-dept').textContent  = data.department || '—';
-    document.getElementById('val-name').textContent  = data.name       || '—';
-    document.getElementById('val-time').textContent  = data.scan_time  || '—';
-    document.getElementById('val-acc').textContent   = data.accuracy   || '—';
-}
-
-function showToast(msg, type = 'info') {
-    toast.textContent = msg;
-    toast.className   = `toast toast-${type} show`;
-    setTimeout(() => toast.classList.remove('show'), 3000);
+    document.getElementById('val-plate').textContent = data.plate     || '—';
+    document.getElementById('val-name').textContent  = data.name      || '—';
+    document.getElementById('val-time').textContent  = data.scan_time || '—';
+    document.getElementById('val-acc').textContent   = data.accuracy  || '—';
 }
 </script>
 

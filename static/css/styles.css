@@ -176,6 +176,15 @@ body::after {
     display: block;
 }
 
+/* Bounding-box canvas sits exactly on top of the video */
+.box-canvas {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+}
+
 .camera-overlay {
     position: absolute;
     inset: 0;
@@ -191,80 +200,85 @@ body::after {
     letter-spacing: 0.06em;
 }
 
-/* ─── Camera button row ─────────────────────────────────────────────────── */
-.cam-btns {
+/* ─── Live Terminal ─────────────────────────────────────────────────────── */
+.live-terminal {
+    background: rgba(0, 0, 0, 0.7);
+    border: 1px solid var(--line);
+    border-radius: 12px;
     display: flex;
-    gap: 0.7rem;
+    flex-direction: column;
+    overflow: hidden;
+    height: 200px;
     flex-shrink: 0;
 }
 
-.cam-btns .btn-primary,
-.cam-btns .btn-stop,
-.cam-btns .btn-secondary {
+.terminal-header {
+    background: rgba(20, 22, 28, 0.95);
+    color: var(--ink);
+    padding: 0.45rem 1rem;
+    font-size: 0.85rem;
+    letter-spacing: 0.07em;
+    border-bottom: 1px solid var(--line);
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-family: 'Irish Grover', serif;
+}
+
+/* macOS-style traffic lights */
+.term-dot {
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+.term-dot.red    { background: #ff5f57; }
+.term-dot.yellow { background: #febc2e; }
+.term-dot.green  { background: #28c840; }
+
+.term-status {
+    margin-left: auto;
+    font-size: 0.78rem;
+    letter-spacing: 0.06em;
+    color: rgba(255,255,255,0.4);
+}
+.term-status.active      { color: #28c840; }
+.term-status.processing  { color: #febc2e; }
+.term-status.unreg-status{ color: #ff9800; }
+.term-status.error-status{ color: #ff5f57; }
+
+.terminal-content {
+    padding: 0.7rem 0.9rem;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    font-family: 'Consolas', 'Courier New', Courier, monospace;
+    font-size: 0.82rem;
     flex: 1;
 }
 
-.cam-btns .btn-analyze {
-    flex: 1.5;
-    min-height: 48px;
-    margin-top: 0;
+.log-line {
+    word-break: break-all;
+    line-height: 1.45;
+    animation: fadeIn 0.2s ease;
+}
+@keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity:1; transform: none; } }
+
+.log-line.info         { color: #88ccff; }
+.log-line.registered   { color: #4caf50; }
+.log-line.unregistered { color: #ff9800; }
+.log-line.error        { color: #f44336; }
+
+.log-time {
+    color: rgba(255, 255, 255, 0.3);
+    margin-right: 0.3rem;
 }
 
-/* ─── Buttons ───────────────────────────────────────────────────────────── */
-.btn-primary, .btn-secondary, .btn-analyze, .btn-stop {
-    width: 100%;
-    min-height: 44px;
-    border: 1px solid var(--line);
-    border-radius: 12px;
-    font-family: 'Irish Grover', serif;
-    font-size: 1rem;
-    letter-spacing: 0.06em;
-    color: var(--ink);
-    cursor: pointer;
-    transition: all 0.3s ease;
-    padding: 0.5rem 1rem;
-}
-
-.btn-primary {
-    background: linear-gradient(135deg, var(--blue) 0%, var(--blue-2) 100%);
-    box-shadow: 0 4px 12px rgba(59,156,207,0.3);
-}
-.btn-primary:hover {
-    background: linear-gradient(135deg, #4aacdf 0%, #3a8bb8 100%);
-    box-shadow: 0 6px 16px rgba(59,156,207,0.5);
-    transform: translateY(-1px);
-}
-
-.btn-stop {
-    background: linear-gradient(135deg, #cf3b3b 0%, #a82a2a 100%);
-    box-shadow: 0 4px 12px rgba(207,59,59,0.3);
-}
-
-.btn-secondary {
-    background: var(--inner);
-}
-.btn-secondary:hover:not(:disabled) {
-    background: rgba(59,156,207,0.15);
-    border-color: rgba(59,156,207,0.4);
-    transform: translateY(-1px);
-}
-.btn-secondary:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
-}
-
-.btn-analyze {
-    background: linear-gradient(135deg, var(--blue) 0%, var(--blue-2) 100%);
-    box-shadow: 0 4px 12px rgba(59,156,207,0.3);
-    font-size: 1.1rem;
-    min-height: 50px;
-    margin-top: auto;
-}
-.btn-analyze:hover:not(:disabled) {
-    box-shadow: 0 6px 20px rgba(59,156,207,0.55);
-    transform: translateY(-2px);
-}
-.btn-analyze:disabled { opacity: 0.5; cursor: not-allowed; }
+.log-badge            { font-weight: bold; }
+.log-badge.reg        { color: #4caf50; }
+.log-badge.unreg      { color: #ff9800; }
+.log-badge.err        { color: #f44336; }
+.log-badge.nfo        { color: #88ccff; }
 
 
 
