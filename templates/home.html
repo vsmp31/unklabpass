@@ -174,13 +174,11 @@ async function performScan() {
         const FH    = data.frame_size?.[1] || vh;
         const boxes = data.boxes || [];
 
-        /* Always redraw — boxes or corners */
+        /* Always redraw boxes or clear canvas */
         if (boxes.length > 0) {
             drawBoxes(boxes, FW, FH);
-            /* Restore corners after 3s */
-            setTimeout(drawCorners, 3000);
         } else {
-            drawCorners();
+            bCtx.clearRect(0, 0, boxCanvas.width, boxCanvas.height);
         }
 
         if (data.registered && data.plate) {
@@ -199,7 +197,7 @@ async function performScan() {
     } catch (err) {
         addLog('Network error: ' + err.message, 'error');
         setStatus('● ERROR', 'error-status');
-        drawCorners();
+        bCtx.clearRect(0, 0, boxCanvas.width, boxCanvas.height);
     } finally {
         isAnalyzing = false;
     }
