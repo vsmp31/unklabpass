@@ -185,6 +185,10 @@ async function performScan() {
             addLog(`Plate <b>${data.plate}</b> — ${data.name || ''}`, 'registered');
             updateInfoCard(data);
             setStatus('● TERDAFTAR', 'active');
+        } else if (data.plate) {
+            addLog(`Plate <b>${data.plate}</b> — Tidak Terdaftar`, 'unregistered');
+            updateInfoCardUnregistered(data);
+            setStatus('● TIDAK TERDAFTAR', 'error-status');
         } else if (boxes.length > 0) {
             const cls = [...new Set(boxes.map(b => b.class_name))].slice(0, 5).join(', ');
             addLog(`${boxes.length} obj: ${cls}`, 'info');
@@ -277,10 +281,20 @@ function setStatus(t, cls) {
 
 function updateInfoCard(data) {
     captureBox.innerHTML = `
-        <div class="success-badge">✓ Terdeteksi</div>
+        <div class="success-badge">✓ Terdaftar</div>
         <div class="plate-number">${data.plate}</div>`;
     document.getElementById('val-plate').textContent = data.plate     || '—';
     document.getElementById('val-name').textContent  = data.name      || '—';
+    document.getElementById('val-time').textContent  = data.scan_time || '—';
+    document.getElementById('val-acc').textContent   = data.accuracy  || '—';
+}
+
+function updateInfoCardUnregistered(data) {
+    captureBox.innerHTML = `
+        <div class="warning-badge" style="background: #ff9800; color: #000; padding: 4px 8px; border-radius: 4px; font-weight: bold; font-size: 0.8rem; display: inline-block; margin-bottom: 8px;">⚠ Tidak Terdaftar</div>
+        <div class="plate-number" style="color: #ff9800;">${data.plate}</div>`;
+    document.getElementById('val-plate').textContent = data.plate     || '—';
+    document.getElementById('val-name').textContent  = '—';
     document.getElementById('val-time').textContent  = data.scan_time || '—';
     document.getElementById('val-acc').textContent   = data.accuracy  || '—';
 }

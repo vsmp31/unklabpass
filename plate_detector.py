@@ -96,15 +96,28 @@ def detect_objects(img: np.ndarray) -> list[dict]:
 # ── OCR + plate matching ───────────────────────────────────────────────────────
 
 def ocr_frame(img: np.ndarray) -> str:
-    """Run EasyOCR on the full (grayscaled) frame for plate text."""
+    """Run EasyOCR on the frame for plate text."""
     reader = get_reader()
     gray   = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    
+    # Upscale if image is small to improve OCR accuracy
+    h, w = gray.shape[:2]
+    if w < 300:
+        scale = 300 / w
+        gray = cv2.resize(gray, (0, 0), fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+
     result = reader.readtext(
         gray,
         allowlist="ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ",
         detail=1, paragraph=False,
     )
-    return " ".join(r[1] for r in result if r[2] >= 0.20).strip()
+    
+    if result:
+        log.info(f"[OCR] Raw results: {[(r[1], round(r[2], 2)) for r in result]}")
+    else:
+        log.info("[OCR] No text detected.")
+
+    return " ".join(r[1] for r in result if r[2] >= 0.10).strip()
 
 
 def normalize(text: str) -> str:
@@ -152,9 +165,9 @@ def analyze_frame(b64_image: str, lecturers: list[dict]) -> dict:
         
         for box in sorted_boxes:
             bx, by, bw, bh = box["x"], box["y"], box["w"], box["h"]
-            # Add padding
-            pad_x = int(bw * 0.05)
-            pad_y = int(bh * 0.05)
+            # Add padding (15% for more context)
+            pad_x = int(bw * 0.15)
+            pad_y = int(bh * 0.15)
             x1 = max(0, bx - pad_x)
             y1 = max(0, by - pad_y)
             x2 = min(fw, bx + bw + pad_x)
