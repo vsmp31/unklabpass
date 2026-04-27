@@ -149,11 +149,13 @@ async function performScan() {
     isAnalyzing = true;
     setStatus('● PROCESSING', 'processing');
 
-    const vw = video.videoWidth  || 1280;
-    const vh = video.videoHeight || 720;
+    // Downscale image to 640px width to speed up transfer & processing
+    const targetW = 640;
+    const targetH = Math.round(640 * ((video.videoHeight || 720) / (video.videoWidth || 1280)));
     const ctx = snapCanvas.getContext('2d');
-    snapCanvas.width = vw; snapCanvas.height = vh;
-    ctx.drawImage(video, 0, 0);
+    snapCanvas.width = targetW; 
+    snapCanvas.height = targetH;
+    ctx.drawImage(video, 0, 0, targetW, targetH);
 
     try {
         const resp = await fetch('/analyze', {

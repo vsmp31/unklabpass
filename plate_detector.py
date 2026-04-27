@@ -70,7 +70,7 @@ def detect_objects(img: np.ndarray) -> list[dict]:
     """
     model  = get_yolo()
     bright = _boost_frame(img)
-    results = model(bright, conf=0.20, verbose=False, imgsz=640)
+    results = model(bright, conf=0.10, verbose=False, imgsz=640)
 
     boxes: list[dict] = []
     for r in results:
@@ -117,7 +117,17 @@ def ocr_frame(img: np.ndarray) -> str:
     else:
         log.info("[OCR] No text detected.")
 
-    return " ".join(r[1] for r in result if r[2] >= 0.10).strip()
+    raw_text = " ".join(r[1] for r in result if r[2] >= 0.10).strip()
+    
+    # Filter out expiration month/year (the 4 digits at the bottom)
+    # Indonesian format: [1-2 Letters] [1-4 Digits] [0-3 Letters]
+    match = re.search(r"([A-Z]{1,2})\s*(\d{1,4})\s*([A-Z]{0,3})", raw_text.upper())
+    if match:
+        cleaned = " ".join(g for g in match.groups() if g).strip()
+        log.info(f"[OCR] Cleaned plate: {cleaned} (discarded year/bottom text)")
+        return cleaned
+
+    return raw_text
 
 
 def normalize(text: str) -> str:
