@@ -121,9 +121,9 @@ window.addEventListener('DOMContentLoaded', async () => {
     await startCamera();
     if (isRunning) {
         addLog('Camera active. YOLOv8 object detection ready.', 'info');
-        addLog('Detecting all objects every 3s...', 'info');
+        addLog('Detecting all objects every 1s...', 'info');
         setStatus('● SCANNING', 'active');
-        setInterval(performScan, 3000);
+        setInterval(performScan, 1000);
     }
 });
 
@@ -212,9 +212,7 @@ function drawBoxes(boxes, FW, FH) {
         const d     = toDisp(box.x, box.y, box.w, box.h, FW, FH);
         const color = box.is_registered ? '#00e676' : classColor(box.class_id);
 
-        /* Transparent fill */
-        bCtx.fillStyle = color + '22';
-        bCtx.fillRect(d.x, d.y, d.w, d.h);
+        /* Border only */
 
         /* Glowing border */
         bCtx.shadowColor = color + 'bb';

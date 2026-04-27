@@ -2,7 +2,7 @@
 plate_detector.py
 ─────────────────
 Two-stage pipeline:
-  1. YOLOv8n  — general object detection (draws colored boxes on everything)
+  1. YOLO (best.pt) — general object detection (draws colored boxes on everything)
   2. EasyOCR  — plate text reading (checks against lecturer DB)
 """
 
@@ -12,15 +12,17 @@ import easyocr
 import base64
 import re
 import logging
+import os
 from ultralytics import YOLO
 
 log = logging.getLogger(__name__)
 
 # ── Eager-load both models at import time ─────────────────────────────────────
 # This ensures they are ready before the first HTTP request arrives.
-log.info("[YOLO] Loading YOLOv8n…")
-_yolo: YOLO = YOLO("yolov8n.pt")    # ~6 MB, auto-downloaded on first run
-log.info("[YOLO] YOLOv8n ready.")
+log.info("[YOLO] Loading custom best.pt…")
+MODEL_PATH = os.path.join(os.path.dirname(__file__), "model", "best.pt")
+_yolo: YOLO = YOLO(MODEL_PATH)
+log.info("[YOLO] best.pt ready.")
 
 log.info("[OCR] Loading EasyOCR…")
 _reader: easyocr.Reader = easyocr.Reader(["en"], gpu=False, verbose=False)
@@ -129,10 +131,10 @@ def match_plate(text: str, lecturers: list[dict]) -> dict | None:
 def analyze_frame(b64_image: str, lecturers: list[dict]) -> dict:
     """
     1. Decode frame
-    2. YOLOv8 → detect all objects (boxes always populated)
-    3. EasyOCR → try to read plate text from full frame
-    4. Match against lecturer DB
-    Returns structured result for the Flask API.
+    2. YOLO (best.pt) → detect license plates
+    3. Crop detected plate region(s)
+    4. EasyOCR → read text from cropped region
+    5. Match against lecturer DB
     """
     img     = decode_b64(b64_image)
     fh, fw  = img.shape[:2]
@@ -140,13 +142,47 @@ def analyze_frame(b64_image: str, lecturers: list[dict]) -> dict:
     # ── Stage 1: object detection ─────────────────────────────────────────────
     yolo_boxes = detect_objects(img)
 
-    # ── Stage 2: plate OCR ────────────────────────────────────────────────────
-    ocr_text = ocr_frame(img)
-    matched  = match_plate(ocr_text, lecturers) if ocr_text else None
-    plate    = matched["plate"] if matched else ocr_text
+    # ── Stage 2: Crop & OCR ───────────────────────────────────────────────────
+    ocr_text = ""
+    matched = None
 
-    # If a registered plate found, flag ALL detected boxes as registered
-    # so the frontend can highlight them in green
+    if yolo_boxes:
+        # Sort boxes by confidence descending
+        sorted_boxes = sorted(yolo_boxes, key=lambda b: b.get("conf", 0.0), reverse=True)
+        
+        for box in sorted_boxes:
+            bx, by, bw, bh = box["x"], box["y"], box["w"], box["h"]
+            # Add padding
+            pad_x = int(bw * 0.05)
+            pad_y = int(bh * 0.05)
+            x1 = max(0, bx - pad_x)
+            y1 = max(0, by - pad_y)
+            x2 = min(fw, bx + bw + pad_x)
+            y2 = min(fh, by + bh + pad_y)
+            
+            crop_img = img[y1:y2, x1:x2]
+            if crop_img.size > 0:
+                text = ocr_frame(crop_img)
+                if text:
+                    # Check if this plate matches DB
+                    m = match_plate(text, lecturers)
+                    if m:
+                        matched = m
+                        ocr_text = text
+                        break
+                    # Keep the first OCR text if no match found later
+                    if not ocr_text:
+                        ocr_text = text
+                        
+    else:
+        # Fallback to full frame OCR if YOLO didn't find any plate
+        ocr_text = ocr_frame(img)
+        if ocr_text:
+            matched = match_plate(ocr_text, lecturers)
+
+    plate = matched["plate"] if matched else ocr_text
+
+    # Flag all boxes as registered if matched (for frontend color)
     if matched:
         for box in yolo_boxes:
             box["is_registered"] = True
