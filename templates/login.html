@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="page-grid" style="display:flex; justify-content:center; align-items:center; height:100%;">
+    <div class="panel" style="max-width:400px; width:100%; text-align:center;">
+        <h2 class="section-title">Akses Terbatas</h2>
+        <div class="section-subtitle" style="margin-bottom: 20px;">Silakan masuk menggunakan akun petugas</div>
+
+        {% if error %}
+        <div class="toast show toast-error" style="position:relative; transform:none; bottom:0; left:0; margin-bottom:20px; width:100%;">
+            {{ error }}
+        </div>
+        {% endif %}
+
+        <form method="POST" action="/login" style="display:flex; flex-direction:column; gap:1rem;">
+            <input type="text" name="username" placeholder="Username (contoh: admin)" class="up-input" autocomplete="off" required>
+            <input type="password" name="password" placeholder="Password" class="up-input" required>
+            <button type="submit" class="up-btn" style="margin-top:10px; font-weight:bold; letter-spacing:1px;">LOGIN DASHBOARD</button>
+        </form>
+    </div>
+</div>
+{% endblock %}

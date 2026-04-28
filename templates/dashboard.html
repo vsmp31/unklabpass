@@ -1,0 +1,262 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="page-grid">
+    
+    <!-- ─── Left Panel: CRUD Database ──────────────────────────────────────── -->
+    <div class="panel">
+        <h2 class="section-title">Manajemen Database Mobil</h2>
+        <div class="section-subtitle">Tambah, ubah, atau hapus kendaraan terdaftar</div>
+
+        <!-- Add Vehicle Form -->
+        <div class="crud-form">
+            <input type="text" id="input-plate" placeholder="Plat Nomor (ex: DB1234A)" class="up-input" autocomplete="off">
+            <input type="text" id="input-name" placeholder="Nama Pemilik" class="up-input" autocomplete="off">
+            <button id="btn-add" class="up-btn">Tambah Kendaraan</button>
+        </div>
+
+        <div id="crud-msg" class="toast"></div>
+
+        <!-- Vehicle List -->
+        <div class="vehicle-list-wrapper">
+            <table class="up-table">
+                <thead>
+                    <tr>
+                        <th>Plat Nomor</th>
+                        <th>Nama Pemilik</th>
+                        <th>Aksi</th>
+                    </tr>
+                </thead>
+                <tbody id="vehicle-table-body">
+                    <!-- Loaded via JS -->
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- ─── Right Panel: Real-Time Logs ────────────────────────────────────── -->
+    <div class="panel">
+        <h2 class="section-title">Real-Time Gate Logs</h2>
+        <div class="section-subtitle">Histori kendaraan keluar-masuk gerbang</div>
+        
+        <div class="logs-container" id="logs-container">
+            <!-- Loaded via JS -->
+            <div class="spinner-wrap" id="logs-spinner">
+                <div class="spinner"></div> Menunggu data...
+            </div>
+        </div>
+    </div>
+
+</div>
+
+<script>
+/* ─── Variables ──────────────────────────────────────────────────────────── */
+const tableBody = document.getElementById('vehicle-table-body');
+const logsContainer = document.getElementById('logs-container');
+const btnAdd = document.getElementById('btn-add');
+const inputPlate = document.getElementById('input-plate');
+const inputName = document.getElementById('input-name');
+const crudMsg = document.getElementById('crud-msg');
+
+let editModePlate = null;
+const btnCancel = document.createElement('button');
+btnCancel.className = 'up-btn';
+btnCancel.style.backgroundColor = '#6c757d';
+btnCancel.style.marginLeft = '10px';
+btnCancel.textContent = 'Batal';
+btnCancel.style.display = 'none';
+btnAdd.parentNode.appendChild(btnCancel);
+
+btnCancel.onclick = () => {
+    editModePlate = null;
+    inputPlate.value = '';
+    inputName.value = '';
+    btnAdd.textContent = 'Tambah Kendaraan';
+    btnCancel.style.display = 'none';
+};
+
+/* ─── Fetch & Render Vehicles ────────────────────────────────────────────── */
+async function loadVehicles() {
+    try {
+        const res = await fetch('/api/vehicles');
+        const data = await res.json();
+        
+        tableBody.innerHTML = '';
+        if(data.length === 0) {
+            tableBody.innerHTML = `<tr><td colspan="3" style="text-align:center; color:gray;">Belum ada kendaraan</td></tr>`;
+            return;
+        }
+
+        data.forEach(v => {
+            const tr = document.createElement('tr');
+            const safeName = v.name.replace(/'/g, "\\'");
+            tr.innerHTML = `
+                <td style="font-weight:bold; color:var(--blue);">${v.plate}</td>
+                <td>${v.name}</td>
+                <td>
+                    <button class="btn-edit" onclick="editVehicle('${v.plate}', '${safeName}')">Edit</button>
+                    <button class="btn-delete" onclick="deleteVehicle('${v.plate}')">Hapus</button>
+                </td>
+            `;
+            tableBody.appendChild(tr);
+        });
+    } catch(err) {
+        console.error("Gagal load vehicles", err);
+    }
+}
+
+/* ─── Fetch & Render Logs ────────────────────────────────────────────────── */
+let currentLogsJSON = "";
+async function loadLogs() {
+    try {
+        const res = await fetch('/api/logs');
+        const logsText = await res.text();
+        
+        // Anti-flicker: Jangan render ulang jika tidak ada data log baru
+        if (logsText === currentLogsJSON) return;
+        currentLogsJSON = logsText;
+        
+        const logs = JSON.parse(logsText);
+        
+        logsContainer.innerHTML = '';
+        if(logs.length === 0) {
+            logsContainer.innerHTML = `<div style="text-align:center; color:gray; padding-top:20px;">Belum ada histori logs</div>`;
+            return;
+        }
+
+        logs.forEach(log => {
+            const div = document.createElement('div');
+            const isReg = log.registered;
+            const borderColor = isReg ? '#4caf50' : '#ff9800';
+            const badgeClass = isReg ? 'badge-success' : 'badge-warning';
+            const badgeText = isReg ? '✔ Terdaftar' : '⚠ Tidak Terdaftar';
+            
+            div.style.cssText = `
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                padding: 12px 16px;
+                background: rgba(255,255,255,0.03);
+                border-radius: 8px;
+                margin-bottom: 10px;
+                border-left: 4px solid ${borderColor};
+            `;
+            
+            const timeParts = log.time.split(' ');
+            const dateStr = timeParts[0];
+            const timeStr = timeParts[1] || '';
+
+            div.innerHTML = `
+                <div style="display:flex; flex-direction:column; gap:6px;">
+                    <div style="font-size:0.75rem; color:#888;">
+                        <i class="bi bi-clock" style="margin-right:4px;"></i> ${timeStr} 
+                        <span style="margin-left:8px; opacity:0.5;">${dateStr}</span>
+                    </div>
+                    <div style="font-family:'Consolas', monospace; font-size:1.15rem; font-weight:bold; letter-spacing:1px; color:#fff;">
+                        ${log.plate}
+                    </div>
+                    ${isReg ? `
+                    <div style="font-size:0.85rem; color:#bbb;">
+                        <i class="bi bi-person-badge" style="margin-right:4px;"></i> ${log.name}
+                    </div>
+                    ` : ''}
+                </div>
+                <div>
+                    <span class="log-badge ${badgeClass}">${badgeText}</span>
+                </div>
+            `;
+            logsContainer.appendChild(div);
+        });
+    } catch(err) {
+        console.error("Gagal load logs", err);
+    }
+}
+
+/* ─── Add Vehicle ────────────────────────────────────────────────────────── */
+btnAdd.addEventListener('click', async () => {
+    const plate = inputPlate.value.trim();
+    const name = inputName.value.trim();
+    if(!plate || !name) {
+        showMsg('Plat dan Nama wajib diisi!', 'toast-warning');
+        return;
+    }
+
+    try {
+        let res, result;
+        if (editModePlate) {
+            res = await fetch('/api/vehicles', {
+                method: 'PUT',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({old_plate: editModePlate, new_plate: plate, name})
+            });
+            result = await res.json();
+            if(result.success) {
+                showMsg('Data berhasil diubah!', 'toast-success');
+                btnCancel.click(); // Reset state
+                loadVehicles();
+            } else {
+                showMsg('Gagal: ' + result.error, 'toast-error');
+            }
+        } else {
+            res = await fetch('/api/vehicles', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({plate, name})
+            });
+            result = await res.json();
+            if(result.success) {
+                showMsg('Kendaraan berhasil ditambahkan!', 'toast-success');
+                inputPlate.value = '';
+                inputName.value = '';
+                loadVehicles();
+            } else {
+                showMsg('Gagal: ' + result.error, 'toast-error');
+            }
+        }
+    } catch (err) {
+        showMsg('Terjadi kesalahan jaringan', 'toast-error');
+    }
+});
+
+/* ─── Edit Vehicle ───────────────────────────────────────────────────────── */
+window.editVehicle = function(plate, name) {
+    editModePlate = plate;
+    inputPlate.value = plate;
+    inputName.value = name;
+    btnAdd.textContent = 'Simpan Perubahan';
+    btnCancel.style.display = 'inline-block';
+    inputPlate.focus();
+}
+
+/* ─── Delete Vehicle ─────────────────────────────────────────────────────── */
+window.deleteVehicle = async function(plate) {
+    if(!confirm(`Yakin ingin menghapus kendaraan ${plate}?`)) return;
+    
+    try {
+        const res = await fetch(`/api/vehicles/${plate}`, { method: 'DELETE' });
+        const result = await res.json();
+        if(result.success) {
+            showMsg('Kendaraan dihapus!', 'toast-success');
+            loadVehicles();
+        } else {
+            showMsg('Gagal menghapus: ' + result.error, 'toast-error');
+        }
+    } catch (err) {
+        showMsg('Terjadi kesalahan jaringan', 'toast-error');
+    }
+}
+
+/* ─── Helpers ────────────────────────────────────────────────────────────── */
+function showMsg(text, typeClass) {
+    crudMsg.textContent = text;
+    crudMsg.className = `toast show ${typeClass}`;
+    setTimeout(() => { crudMsg.className = 'toast'; }, 3000);
+}
+
+/* ─── Init & Polling ─────────────────────────────────────────────────────── */
+loadVehicles();
+loadLogs();
+setInterval(loadLogs, 2000); // Poll logs every 2 seconds
+
+</script>
+{% endblock %}

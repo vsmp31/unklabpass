@@ -16,7 +16,13 @@
     <nav class="up-nav" role="navigation" aria-label="Main navigation">
         <div class="up-nav-links">
             <a id="nav-home"  class="up-nav-link {% if page == 'home'  %}active{% endif %}" href="/">Home</a>
+            <a id="nav-dash"  class="up-nav-link {% if page == 'dashboard' %}active{% endif %}" href="/dashboard">Dashboard</a>
             <a id="nav-about" class="up-nav-link {% if page == 'about' %}active{% endif %}" href="/about">About</a>
+            {% if session.get('logged_in') %}
+            <a class="up-nav-link" style="color:#ff5f57; font-weight:bold; margin-left:15px;" href="/logout">
+                <i class="bi bi-box-arrow-right"></i> Logout
+            </a>
+            {% endif %}
         </div>
         <div class="up-brand">
             <span class="up-brand-name">UnklabPass</span>

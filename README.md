@@ -18,10 +18,9 @@ pip install -r requirements.txt
 
 ### 2. Run the Application
 ```bash
-streamlit run app.py
+flask run
 ```
 
 ## Project Structure
 - `app.py`: Main application entry point.
-- `.streamlit/config.toml`: UI Theme and Server configurations.
 - `requirements.txt`: Python package dependencies.

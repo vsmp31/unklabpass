@@ -40,13 +40,13 @@
 
             <div class="capture-box" id="capture-box">
                 {% if detected %}
-                    <div class="success-badge">✓ Terdeteksi</div>
-                    <div class="plate-number">{{ detected.plate }}</div>
+                <div class="success-badge">✓ Terdeteksi</div>
+                <div class="plate-number">{{ detected.plate }}</div>
                 {% else %}
-                    <div class="waiting-text">
-                        Menunggu hasil analisa...<br>
-                        <span style="font-size:0.9rem;opacity:0.6;">Kamera aktif otomatis</span>
-                    </div>
+                <div class="waiting-text">
+                    Menunggu hasil analisa...<br>
+                    <span style="font-size:0.9rem;opacity:0.6;">Kamera aktif otomatis</span>
+                </div>
                 {% endif %}
             </div>
 
@@ -74,232 +74,248 @@
 </div>
 
 <script>
-/* ═══ refs ═══════════════════════════════════════════════════════════════════ */
-const video       = document.getElementById('camera-feed');
-const boxCanvas   = document.getElementById('box-canvas');
-const snapCanvas  = document.getElementById('snapshot-canvas');
-const overlay     = document.getElementById('camera-overlay');
-const captureBox  = document.getElementById('capture-box');
-const termContent = document.getElementById('terminal-content');
-const termStatus  = document.getElementById('term-status');
-const bCtx        = boxCanvas.getContext('2d');
+    /* ═══ refs ═══════════════════════════════════════════════════════════════════ */
+    const video = document.getElementById('camera-feed');
+    const boxCanvas = document.getElementById('box-canvas');
+    const snapCanvas = document.getElementById('snapshot-canvas');
+    const overlay = document.getElementById('camera-overlay');
+    const captureBox = document.getElementById('capture-box');
+    const termContent = document.getElementById('terminal-content');
+    const termStatus = document.getElementById('term-status');
+    const bCtx = boxCanvas.getContext('2d');
 
-let cameraStream = null;
-let isRunning    = false;
-let isAnalyzing  = false;
+    let cameraStream = null;
+    let isRunning = false;
+    let isAnalyzing = false;
+    let lastPlate = "";
 
-/* ═══ 20-color YOLO palette ══════════════════════════════════════════════════ */
-const PALETTE = [
-    '#ff4d4d','#ff9900','#ffee00','#33ff33','#00cfff',
-    '#a64dff','#ff66cc','#00ffcc','#ff6633','#66ff66',
-    '#ff3399','#33ccff','#ffaa00','#66ffcc','#ff6699',
-    '#33ff99','#cc44ff','#ff8844','#44ffdd','#ff4488',
-];
-const classColor = id => PALETTE[Math.abs(id ?? 0) % PALETTE.length];
+    /* ═══ 20-color YOLO palette ══════════════════════════════════════════════════ */
+    const PALETTE = [
+        '#ff4d4d', '#ff9900', '#ffee00', '#33ff33', '#00cfff',
+        '#a64dff', '#ff66cc', '#00ffcc', '#ff6633', '#66ff66',
+        '#ff3399', '#33ccff', '#ffaa00', '#66ffcc', '#ff6699',
+        '#33ff99', '#cc44ff', '#ff8844', '#44ffdd', '#ff4488',
+    ];
+    const classColor = id => PALETTE[Math.abs(id ?? 0) % PALETTE.length];
 
-/* ═══ Canvas helpers ═════════════════════════════════════════════════════════ */
-function fitCanvas() {
-    const r = video.getBoundingClientRect();
-    if (r.width > 0 && r.height > 0) {
-        boxCanvas.width  = Math.round(r.width);
-        boxCanvas.height = Math.round(r.height);
+    /* ═══ Canvas helpers ═════════════════════════════════════════════════════════ */
+    function fitCanvas() {
+        const r = video.getBoundingClientRect();
+        if (r.width > 0 && r.height > 0) {
+            boxCanvas.width = Math.round(r.width);
+            boxCanvas.height = Math.round(r.height);
+        }
     }
-}
 
-/* Maps raw-frame coords to display coords under object-fit:cover */
-function toDisp(fx, fy, fw, fh, FW, FH) {
-    const dw = boxCanvas.width, dh = boxCanvas.height;
-    const sc = Math.max(dw / FW, dh / FH);
-    const ox = (dw - FW * sc) / 2, oy = (dh - FH * sc) / 2;
-    return { x: fx*sc+ox, y: fy*sc+oy, w: fw*sc, h: fh*sc };
-}
-
-
-
-/* ═══ Camera ════════════════════════════════════════════════════════════════ */
-window.addEventListener('DOMContentLoaded', async () => {
-    await startCamera();
-    if (isRunning) {
-        addLog('Camera active. YOLOv8 object detection ready.', 'info');
-        addLog('Detecting all objects every 1s...', 'info');
-        setStatus('● SCANNING', 'active');
-        setInterval(performScan, 1000);
+    /* Maps raw-frame coords to display coords under object-fit:cover */
+    function toDisp(fx, fy, fw, fh, FW, FH) {
+        const dw = boxCanvas.width, dh = boxCanvas.height;
+        const sc = Math.max(dw / FW, dh / FH);
+        const ox = (dw - FW * sc) / 2, oy = (dh - FH * sc) / 2;
+        return { x: fx * sc + ox, y: fy * sc + oy, w: fw * sc, h: fh * sc };
     }
-});
 
-async function startCamera() {
-    try {
-        cameraStream = await navigator.mediaDevices.getUserMedia({
-            video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }
-        });
-        video.srcObject       = cameraStream;
-        overlay.style.display = 'none';
-        isRunning             = true;
-        video.addEventListener('loadedmetadata', fitCanvas);
-        window.addEventListener('resize', fitCanvas);
-    } catch (err) {
-        addLog('Kamera error: ' + err.message, 'error');
-        overlay.querySelector('.camera-overlay-text').textContent = '⚠ Kamera tidak tersedia';
+
+
+    /* ═══ Camera ════════════════════════════════════════════════════════════════ */
+    window.addEventListener('DOMContentLoaded', async () => {
+        await startCamera();
+        if (isRunning) {
+            addLog('Camera active. YOLOv8 object detection ready.', 'info');
+            addLog('Kamera aktif (Anti-Blur via Vector).', 'info');
+            setStatus('● SCANNING', 'active');
+            setInterval(performScan, 2500);
+        }
+    });
+
+    async function startCamera() {
+        try {
+            cameraStream = await navigator.mediaDevices.getUserMedia({
+                video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }
+            });
+            video.srcObject = cameraStream;
+            overlay.style.display = 'none';
+            isRunning = true;
+            video.addEventListener('loadedmetadata', fitCanvas);
+            window.addEventListener('resize', fitCanvas);
+        } catch (err) {
+            addLog('Kamera error: ' + err.message, 'error');
+            overlay.querySelector('.camera-overlay-text').textContent = '⚠ Kamera tidak tersedia';
+        }
     }
-}
 
-/* ═══ Scan loop ═════════════════════════════════════════════════════════════ */
-async function performScan() {
-    if (!isRunning || isAnalyzing) return;
-    isAnalyzing = true;
-    setStatus('● PROCESSING', 'processing');
+    /* ═══ Scan loop ═════════════════════════════════════════════════════════════ */
+    async function performScan() {
+        if (!isRunning || isAnalyzing) return;
+        isAnalyzing = true;
+        setStatus('● CAPTURING', 'processing');
 
-    // Downscale image to 640px width to speed up transfer & processing
-    const targetW = 640;
-    const targetH = Math.round(640 * ((video.videoHeight || 720) / (video.videoWidth || 1280)));
-    const ctx = snapCanvas.getContext('2d');
-    snapCanvas.width = targetW; 
-    snapCanvas.height = targetH;
-    ctx.drawImage(video, 0, 0, targetW, targetH);
+        const targetW = 640;
+        const targetH = Math.round(640 * ((video.videoHeight || 720) / (video.videoWidth || 1280)));
+        const ctx = snapCanvas.getContext('2d');
+        snapCanvas.width = targetW;
+        snapCanvas.height = targetH;
 
-    try {
-        const resp = await fetch('/analyze', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ image: snapCanvas.toDataURL('image/jpeg', 0.85) }),
-        });
-        const data = await resp.json();
+        const imageVector = [];
+        for (let i = 0; i < 5; i++) {
+            ctx.drawImage(video, 0, 0, targetW, targetH);
+            imageVector.push(snapCanvas.toDataURL('image/jpeg', 0.85));
+            await new Promise(r => setTimeout(r, 60));
+        }
 
-        if (!data.success) {
-            addLog('Server: ' + (data.error || '?'), 'error');
+        setStatus('● PROCESSING', 'processing');
+
+        try {
+            const resp = await fetch('/analyze', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ image: imageVector }),
+            });
+            const data = await resp.json();
+
+            if (!data.success) {
+                addLog('Server: ' + (data.error || '?'), 'error');
+                setStatus('● ERROR', 'error-status');
+                bCtx.clearRect(0, 0, boxCanvas.width, boxCanvas.height);
+                return;
+            }
+
+            const FW = data.frame_size?.[0] || vw;
+            const FH = data.frame_size?.[1] || vh;
+            const boxes = data.boxes || [];
+
+            /* Always redraw boxes or clear canvas */
+            if (boxes.length > 0) {
+                drawBoxes(boxes, FW, FH);
+            } else {
+                bCtx.clearRect(0, 0, boxCanvas.width, boxCanvas.height);
+            }
+
+            if (data.plate) {
+                if (data.plate === lastPlate) {
+                    // Plat yang sama, tidak perlu scan/log ulang
+                    return;
+                }
+                lastPlate = data.plate; // Simpan plat baru
+                
+                if (data.registered) {
+                    addLog(`Plate <b>${data.plate}</b> — ${data.name || ''}`, 'registered');
+                    updateInfoCard(data);
+                    setStatus('● TERDAFTAR', 'active');
+                } else {
+                    addLog(`Plate <b>${data.plate}</b> — Tidak Terdaftar`, 'unregistered');
+                    updateInfoCardUnregistered(data);
+                    setStatus('● TIDAK TERDAFTAR', 'error-status');
+                }
+            } else if (boxes.length > 0) {
+                const cls = [...new Set(boxes.map(b => b.class_name))].slice(0, 5).join(', ');
+                addLog(`${boxes.length} obj: ${cls}`, 'info');
+                setStatus('● SCANNING', 'active');
+            } else {
+                addLog('No objects detected.', 'info');
+                setStatus('● SCANNING', 'active');
+            }
+
+        } catch (err) {
+            addLog('Network error: ' + err.message, 'error');
             setStatus('● ERROR', 'error-status');
             bCtx.clearRect(0, 0, boxCanvas.width, boxCanvas.height);
-            return;
+        } finally {
+            isAnalyzing = false;
         }
+    }
 
-        const FW    = data.frame_size?.[0] || vw;
-        const FH    = data.frame_size?.[1] || vh;
-        const boxes = data.boxes || [];
-
-        /* Always redraw boxes or clear canvas */
-        if (boxes.length > 0) {
-            drawBoxes(boxes, FW, FH);
-        } else {
-            bCtx.clearRect(0, 0, boxCanvas.width, boxCanvas.height);
-        }
-
-        if (data.registered && data.plate) {
-            addLog(`Plate <b>${data.plate}</b> — ${data.name || ''}`, 'registered');
-            updateInfoCard(data);
-            setStatus('● TERDAFTAR', 'active');
-        } else if (data.plate) {
-            addLog(`Plate <b>${data.plate}</b> — Tidak Terdaftar`, 'unregistered');
-            updateInfoCardUnregistered(data);
-            setStatus('● TIDAK TERDAFTAR', 'error-status');
-        } else if (boxes.length > 0) {
-            const cls = [...new Set(boxes.map(b => b.class_name))].slice(0, 5).join(', ');
-            addLog(`${boxes.length} obj: ${cls}`, 'info');
-            setStatus('● SCANNING', 'active');
-        } else {
-            addLog('No objects detected.', 'info');
-            setStatus('● SCANNING', 'active');
-        }
-
-    } catch (err) {
-        addLog('Network error: ' + err.message, 'error');
-        setStatus('● ERROR', 'error-status');
+    /* ═══ Draw YOLO-style colored boxes ════════════════════════════════════════ */
+    function drawBoxes(boxes, FW, FH) {
+        fitCanvas();
         bCtx.clearRect(0, 0, boxCanvas.width, boxCanvas.height);
-    } finally {
-        isAnalyzing = false;
+
+        for (const box of boxes) {
+            const d = toDisp(box.x, box.y, box.w, box.h, FW, FH);
+            const color = box.is_registered ? '#00e676' : classColor(box.class_id);
+
+            /* Border only */
+
+            /* Glowing border */
+            bCtx.shadowColor = color + 'bb';
+            bCtx.shadowBlur = 10;
+            bCtx.strokeStyle = color;
+            bCtx.lineWidth = 2.5;
+            bCtx.strokeRect(d.x, d.y, d.w, d.h);
+            bCtx.shadowBlur = 0;
+
+            /* Label pill */
+            const label = box.is_registered ? `✔ TERDAFTAR  ${box.label}` : box.label;
+            const fs = Math.max(10, Math.min(13, d.w / 8));
+            bCtx.font = `bold ${fs}px Consolas, monospace`;
+            const tw = bCtx.measureText(label).width;
+            const lh = fs + 8;
+            const lx = d.x;
+            const ly = (d.y - lh - 2) < 0 ? d.y + 2 : d.y - lh - 2;
+
+            bCtx.fillStyle = color;
+            pill(lx, ly, tw + 14, lh, 3);
+            bCtx.fill();
+
+            bCtx.fillStyle = '#000';
+            bCtx.fillText(label, lx + 7, ly + fs + 1);
+        }
     }
-}
 
-/* ═══ Draw YOLO-style colored boxes ════════════════════════════════════════ */
-function drawBoxes(boxes, FW, FH) {
-    fitCanvas();
-    bCtx.clearRect(0, 0, boxCanvas.width, boxCanvas.height);
-
-    for (const box of boxes) {
-        const d     = toDisp(box.x, box.y, box.w, box.h, FW, FH);
-        const color = box.is_registered ? '#00e676' : classColor(box.class_id);
-
-        /* Border only */
-
-        /* Glowing border */
-        bCtx.shadowColor = color + 'bb';
-        bCtx.shadowBlur  = 10;
-        bCtx.strokeStyle = color;
-        bCtx.lineWidth   = 2.5;
-        bCtx.strokeRect(d.x, d.y, d.w, d.h);
-        bCtx.shadowBlur  = 0;
-
-        /* Label pill */
-        const label = box.is_registered ? `✔ TERDAFTAR  ${box.label}` : box.label;
-        const fs    = Math.max(10, Math.min(13, d.w / 8));
-        bCtx.font   = `bold ${fs}px Consolas, monospace`;
-        const tw    = bCtx.measureText(label).width;
-        const lh    = fs + 8;
-        const lx    = d.x;
-        const ly    = (d.y - lh - 2) < 0 ? d.y + 2 : d.y - lh - 2;
-
-        bCtx.fillStyle = color;
-        pill(lx, ly, tw + 14, lh, 3);
-        bCtx.fill();
-
-        bCtx.fillStyle = '#000';
-        bCtx.fillText(label, lx + 7, ly + fs + 1);
+    function pill(x, y, w, h, r) {
+        bCtx.beginPath();
+        bCtx.moveTo(x + r, y); bCtx.lineTo(x + w - r, y);
+        bCtx.quadraticCurveTo(x + w, y, x + w, y + r);
+        bCtx.lineTo(x + w, y + h - r);
+        bCtx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+        bCtx.lineTo(x + r, y + h);
+        bCtx.quadraticCurveTo(x, y + h, x, y + h - r);
+        bCtx.lineTo(x, y + r);
+        bCtx.quadraticCurveTo(x, y, x + r, y);
+        bCtx.closePath();
     }
-}
 
-function pill(x, y, w, h, r) {
-    bCtx.beginPath();
-    bCtx.moveTo(x+r,y); bCtx.lineTo(x+w-r,y);
-    bCtx.quadraticCurveTo(x+w,y,x+w,y+r);
-    bCtx.lineTo(x+w,y+h-r);
-    bCtx.quadraticCurveTo(x+w,y+h,x+w-r,y+h);
-    bCtx.lineTo(x+r,y+h);
-    bCtx.quadraticCurveTo(x,y+h,x,y+h-r);
-    bCtx.lineTo(x,y+r);
-    bCtx.quadraticCurveTo(x,y,x+r,y);
-    bCtx.closePath();
-}
+    /* ═══ Terminal ══════════════════════════════════════════════════════════════ */
+    function addLog(msg, type = 'info') {
+        const t = new Date().toLocaleTimeString('id-ID', { hour12: false });
+        const div = document.createElement('div');
+        div.className = `log-line ${type}`;
+        const badge = {
+            registered: '<span class="log-badge reg">[TERDAFTAR]</span>',
+            unregistered: '<span class="log-badge unreg">[TIDAK TERDAFTAR]</span>',
+            error: '<span class="log-badge err">[ERROR]</span>',
+            info: '<span class="log-badge nfo">[INFO]</span>',
+        }[type] || '';
+        div.innerHTML = `<span class="log-time">[${t}]</span> ${badge} ${msg}`;
+        termContent.appendChild(div);
+        termContent.scrollTop = termContent.scrollHeight;
+        while (termContent.children.length > 30) termContent.removeChild(termContent.firstChild);
+    }
 
-/* ═══ Terminal ══════════════════════════════════════════════════════════════ */
-function addLog(msg, type = 'info') {
-    const t   = new Date().toLocaleTimeString('id-ID', { hour12: false });
-    const div = document.createElement('div');
-    div.className = `log-line ${type}`;
-    const badge = {
-        registered:   '<span class="log-badge reg">[TERDAFTAR]</span>',
-        unregistered: '<span class="log-badge unreg">[TIDAK TERDAFTAR]</span>',
-        error:        '<span class="log-badge err">[ERROR]</span>',
-        info:         '<span class="log-badge nfo">[INFO]</span>',
-    }[type] || '';
-    div.innerHTML = `<span class="log-time">[${t}]</span> ${badge} ${msg}`;
-    termContent.appendChild(div);
-    termContent.scrollTop = termContent.scrollHeight;
-    while (termContent.children.length > 30) termContent.removeChild(termContent.firstChild);
-}
+    function setStatus(t, cls) {
+        termStatus.textContent = t;
+        termStatus.className = `term-status ${cls}`;
+    }
 
-function setStatus(t, cls) {
-    termStatus.textContent = t;
-    termStatus.className   = `term-status ${cls}`;
-}
-
-function updateInfoCard(data) {
-    captureBox.innerHTML = `
+    function updateInfoCard(data) {
+        captureBox.innerHTML = `
         <div class="success-badge">✓ Terdaftar</div>
         <div class="plate-number">${data.plate}</div>`;
-    document.getElementById('val-plate').textContent = data.plate     || '—';
-    document.getElementById('val-name').textContent  = data.name      || '—';
-    document.getElementById('val-time').textContent  = data.scan_time || '—';
-    document.getElementById('val-acc').textContent   = data.accuracy  || '—';
-}
+        document.getElementById('val-plate').textContent = data.plate || '—';
+        document.getElementById('val-name').textContent = data.name || '—';
+        document.getElementById('val-time').textContent = data.scan_time || '—';
+        document.getElementById('val-acc').textContent = data.accuracy || '—';
+    }
 
-function updateInfoCardUnregistered(data) {
-    captureBox.innerHTML = `
+    function updateInfoCardUnregistered(data) {
+        captureBox.innerHTML = `
         <div class="warning-badge" style="background: #ff9800; color: #000; padding: 4px 8px; border-radius: 4px; font-weight: bold; font-size: 0.8rem; display: inline-block; margin-bottom: 8px;">⚠ Tidak Terdaftar</div>
         <div class="plate-number" style="color: #ff9800;">${data.plate}</div>`;
-    document.getElementById('val-plate').textContent = data.plate     || '—';
-    document.getElementById('val-name').textContent  = '—';
-    document.getElementById('val-time').textContent  = data.scan_time || '—';
-    document.getElementById('val-acc').textContent   = data.accuracy  || '—';
-}
+        document.getElementById('val-plate').textContent = data.plate || '—';
+        document.getElementById('val-name').textContent = '—';
+        document.getElementById('val-time').textContent = data.scan_time || '—';
+        document.getElementById('val-acc').textContent = data.accuracy || '—';
+    }
 </script>
 
 {% endblock %}

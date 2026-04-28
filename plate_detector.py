@@ -70,7 +70,7 @@ def detect_objects(img: np.ndarray) -> list[dict]:
     """
     model  = get_yolo()
     bright = _boost_frame(img)
-    results = model(bright, conf=0.10, verbose=False, imgsz=640)
+    results = model(bright, conf=0.45, verbose=False, imgsz=640)
 
     boxes: list[dict] = []
     for r in results:
@@ -119,33 +119,52 @@ def ocr_frame(img: np.ndarray) -> str:
 
     raw_text = " ".join(r[1] for r in result if r[2] >= 0.10).strip()
     
-    # Filter out expiration month/year (the 4 digits at the bottom)
-    # Indonesian format: [1-2 Letters] [1-4 Digits] [0-3 Letters]
-    match = re.search(r"([A-Z]{1,2})\s*(\d{1,4})\s*([A-Z]{0,3})", raw_text.upper())
+    # Strictly match 'DB' plates and discard expiration year
+    match = re.search(r"(DB)\s*(\d{1,4})\s*([A-Z]{0,3})", raw_text.upper())
     if match:
-        cleaned = " ".join(g for g in match.groups() if g).strip()
-        log.info(f"[OCR] Cleaned plate: {cleaned} (discarded year/bottom text)")
+        cleaned = "".join(g for g in match.groups() if g).strip()
+        log.info(f"[OCR] Cleaned DB plate: {cleaned}")
         return cleaned
 
-    return raw_text
-
-
-def normalize(text: str) -> str:
-    return re.sub(r"[^A-Z0-9]", "", text.upper())
+    return ""
 
 
 def match_plate(text: str, lecturers: list[dict]) -> dict | None:
-    ocr = normalize(text)
+    ocr = text
     if len(ocr) < 4:
         return None
+        
+    def levenshtein(s1: str, s2: str) -> int:
+        if len(s1) < len(s2):
+            return levenshtein(s2, s1)
+        if len(s2) == 0:
+            return len(s1)
+        prev_row = range(len(s2) + 1)
+        for i, c1 in enumerate(s1):
+            curr_row = [i + 1]
+            for j, c2 in enumerate(s2):
+                ins = prev_row[j + 1] + 1
+                dl  = curr_row[j] + 1
+                sub = prev_row[j] + (c1 != c2)
+                curr_row.append(min(ins, dl, sub))
+            prev_row = curr_row
+        return prev_row[-1]
+
     for lec in lecturers:
-        db = normalize(lec.get("plate", ""))
+        db = lec.get("plate", "")
         if not db:
             continue
+            
         if ocr == db:
             return lec
+            
+        # Toleransi 1 karakter meleset (Levenshtein Distance) untuk plat >= 6 digit
+        if len(ocr) >= 6 and len(db) >= 6 and levenshtein(ocr, db) <= 1:
+            return lec
+            
         if len(ocr) >= 5 and len(db) >= 5 and (ocr in db or db in ocr):
             return lec
+            
     return None
 
 

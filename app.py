@@ -1,5 +1,6 @@
-from flask import Flask, render_template, request, jsonify, session
+from flask import Flask, render_template, request, jsonify, session, redirect, url_for
 import sqlite3
+from werkzeug.security import generate_password_hash, check_password_hash
 import time
 import os
 import glob
@@ -25,13 +26,43 @@ def no_cache(response):
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "data", "vehicles.db")
 
+def init_db():
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL
+        )
+    ''')
+    # Check if admin exists
+    admin = conn.execute("SELECT * FROM users WHERE username = 'admin'").fetchone()
+    if not admin:
+        default_hash = generate_password_hash("admin123")
+        conn.execute("INSERT INTO users (username, password_hash) VALUES (?, ?)", ("admin", default_hash))
+    conn.commit()
+    conn.close()
+
+# Run it on startup
+init_db()
+
+# In-Memory Cache for fast O(1) lookups
+CACHE_VEHICLES = []
 
 def load_vehicles():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    rows = conn.execute("SELECT plat_nomor, nama_pemilik FROM vehicles").fetchall()
-    conn.close()
-    return [{"plate": r["plat_nomor"], "name": r["nama_pemilik"]} for r in rows]
+    global CACHE_VEHICLES
+    if not CACHE_VEHICLES:
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute("SELECT plat_nomor, nama_pemilik FROM vehicles").fetchall()
+            conn.close()
+            CACHE_VEHICLES = [{"plate": r["plat_nomor"], "name": r["nama_pemilik"]} for r in rows]
+            logging.info(f"[CACHE] Database loaded into RAM. Vehicles: {len(CACHE_VEHICLES)}")
+        except Exception as e:
+            logging.error(f"[CACHE] Failed to load DB: {e}")
+            return []
+    return CACHE_VEHICLES
 
 
 # ─── Pages ────────────────────────────────────────────────────────────────────
@@ -51,6 +82,30 @@ def home():
 def about():
     return render_template("about.html", page="about")
 
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if request.method == "POST":
+        username = request.form.get("username", "").strip()
+        password = request.form.get("password", "").strip()
+        
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        user = conn.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
+        conn.close()
+        
+        if user and check_password_hash(user["password_hash"], password):
+            session["logged_in"] = True
+            session["username"] = username
+            return redirect(url_for("dashboard"))
+        else:
+            return render_template("login.html", error="Username atau Password salah!")
+            
+    return render_template("login.html")
+
+@app.route("/logout")
+def logout():
+    session.clear()
+    return redirect(url_for("home"))
 
 # ─── API ──────────────────────────────────────────────────────────────────────
 
@@ -58,14 +113,55 @@ def about():
 def analyze():
     try:
         data      = request.get_json(force=True)
-        b64_image = data.get("image", "")
-        if not b64_image:
+        images    = data.get("image", "")
+        
+        if isinstance(images, str):
+            images = [images]
+            
+        if not images or not images[0]:
             return jsonify({"success": False, "error": "No image data received"}), 400
 
         vehicles  = load_vehicles()
         scan_time = time.strftime("%Y-%m-%d %H:%M:%S")
 
-        result = analyze_frame(b64_image, vehicles)
+        final_result = None
+        for b64_img in images:
+            if not b64_img:
+                continue
+            res = analyze_frame(b64_img, vehicles)
+            if res.get("found") and res.get("plate"):
+                final_result = res
+                break
+            if final_result is None:
+                final_result = res
+                
+        result = final_result
+
+        if result["found"] and result["plate"]:
+            plate_to_log = result["plate"]
+            conn = sqlite3.connect(DB_PATH)
+            cur = conn.cursor()
+            
+            # Cooldown check: Hanya tulis ke log jika plat nomornya berbeda dari baris log terakhir
+            cur.execute("""
+                SELECT plat_nomor FROM gate_logs 
+                ORDER BY entry_time DESC LIMIT 1
+            """)
+            last_logged = cur.fetchone()
+            
+            should_log = True
+            if last_logged and last_logged[0] == plate_to_log:
+                should_log = False
+                    
+            if should_log:
+                cur.execute("""
+                    INSERT INTO gate_logs (plat_nomor, entry_time) 
+                    VALUES (?, ?)
+                """, (plate_to_log, scan_time))
+                conn.commit()
+                logging.info(f"[DB LOG] Plat {plate_to_log} tercatat pada {scan_time}.")
+            
+            conn.close()
 
         base = {
             "success":    True,
@@ -97,6 +193,109 @@ def analyze():
 def clear():
     session.clear()
     return jsonify({"success": True})
+
+
+# ─── Dashboard & CRUD Endpoints ───────────────────────────────────────────────
+
+@app.route("/dashboard")
+def dashboard():
+    if not session.get("logged_in"):
+        return redirect(url_for("login"))
+    return render_template("dashboard.html", page="dashboard")
+
+@app.route("/api/vehicles", methods=["GET"])
+def api_get_vehicles():
+    return jsonify(load_vehicles())
+
+@app.route("/api/vehicles", methods=["POST"])
+def api_add_vehicle():
+    if not session.get("logged_in"):
+        return jsonify({"success": False, "error": "Unauthorized"}), 401
+    global CACHE_VEHICLES
+    data = request.json
+    plate = data.get("plate", "").replace(" ", "").upper()
+    name = data.get("name", "").strip()
+    if not plate or not name:
+        return jsonify({"success": False, "error": "Plate and Name required"}), 400
+        
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.execute("INSERT INTO vehicles (plat_nomor, nama_pemilik) VALUES (?, ?)", (plate, name))
+        conn.commit()
+        conn.close()
+        CACHE_VEHICLES = [] # Invalidate cache
+        return jsonify({"success": True})
+    except sqlite3.IntegrityError:
+        return jsonify({"success": False, "error": "Plate already registered"}), 400
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route("/api/vehicles", methods=["PUT"])
+def api_update_vehicle():
+    if not session.get("logged_in"):
+        return jsonify({"success": False, "error": "Unauthorized"}), 401
+    global CACHE_VEHICLES
+    data = request.json
+    old_plate = data.get("old_plate", "").replace(" ", "").upper()
+    new_plate = data.get("new_plate", "").replace(" ", "").upper()
+    name = data.get("name", "").strip()
+    
+    if not old_plate or not new_plate or not name:
+        return jsonify({"success": False, "error": "Incomplete data"}), 400
+        
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.execute("UPDATE vehicles SET plat_nomor = ?, nama_pemilik = ? WHERE plat_nomor = ?", (new_plate, name, old_plate))
+        conn.commit()
+        conn.close()
+        CACHE_VEHICLES = [] # Invalidate cache
+        return jsonify({"success": True})
+    except sqlite3.IntegrityError:
+        return jsonify({"success": False, "error": "New plate already exists"}), 400
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route("/api/vehicles/<plate>", methods=["DELETE"])
+def api_delete_vehicle(plate):
+    if not session.get("logged_in"):
+        return jsonify({"success": False, "error": "Unauthorized"}), 401
+    global CACHE_VEHICLES
+    plate = plate.replace(" ", "").upper()
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.execute("DELETE FROM vehicles WHERE plat_nomor = ?", (plate,))
+        conn.commit()
+        conn.close()
+        CACHE_VEHICLES = [] # Invalidate cache
+        return jsonify({"success": True})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route("/api/logs", methods=["GET"])
+def api_get_logs():
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        query = """
+            SELECT l.plat_nomor, l.entry_time, v.nama_pemilik
+            FROM gate_logs l
+            LEFT JOIN vehicles v ON l.plat_nomor = v.plat_nomor
+            ORDER BY l.entry_time DESC
+            LIMIT 50
+        """
+        rows = conn.execute(query).fetchall()
+        conn.close()
+        logs = []
+        for r in rows:
+            logs.append({
+                "plate": r["plat_nomor"],
+                "time": r["entry_time"],
+                "name": r["nama_pemilik"],
+                "registered": bool(r["nama_pemilik"])
+            })
+        return jsonify(logs)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 # ─── Run ──────────────────────────────────────────────────────────────────────
