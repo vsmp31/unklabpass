@@ -28,6 +28,8 @@ DB_PATH = os.path.join(os.path.dirname(__file__), "data", "vehicles.db")
 
 def init_db():
     conn = sqlite3.connect(DB_PATH)
+    
+    # Create users table
     conn.execute('''
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -35,16 +37,75 @@ def init_db():
             password_hash TEXT NOT NULL
         )
     ''')
+    
+    # Create vehicles table (if not exists)
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS vehicles (
+            plat_nomor TEXT PRIMARY KEY,
+            nama_pemilik TEXT NOT NULL
+        )
+    ''')
+    
+    # Create gate_logs table (if not exists)
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS gate_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            plat_nomor TEXT NOT NULL,
+            entry_time DATETIME NOT NULL,
+            FOREIGN KEY (plat_nomor) REFERENCES vehicles(plat_nomor)
+        )
+    ''')
+    
+    # ─── CREATE INDEXES untuk performa query yang lebih cepat ───
+    # Index untuk gate_logs.entry_time (untuk ORDER BY entry_time DESC)
+    conn.execute('''
+        CREATE INDEX IF NOT EXISTS idx_gate_logs_entry_time 
+        ON gate_logs(entry_time DESC)
+    ''')
+    
+    # Index untuk gate_logs.plat_nomor (untuk JOIN dengan vehicles)
+    conn.execute('''
+        CREATE INDEX IF NOT EXISTS idx_gate_logs_plat_nomor 
+        ON gate_logs(plat_nomor)
+    ''')
+    
+    # Index untuk users.username (untuk login query)
+    conn.execute('''
+        CREATE INDEX IF NOT EXISTS idx_users_username 
+        ON users(username)
+    ''')
+    
     # Check if admin exists
     admin = conn.execute("SELECT * FROM users WHERE username = 'admin'").fetchone()
     if not admin:
         default_hash = generate_password_hash("admin123")
         conn.execute("INSERT INTO users (username, password_hash) VALUES (?, ?)", ("admin", default_hash))
+    
     conn.commit()
     conn.close()
+    logging.info("[DB] Database initialized with indexes for optimal performance")
 
 # Run it on startup
 init_db()
+
+# Verify indexes on startup
+def verify_indexes():
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT COUNT(*) FROM sqlite_master 
+        WHERE type = 'index' 
+        AND name LIKE 'idx_%'
+    """)
+    count = cursor.fetchone()[0]
+    conn.close()
+    
+    if count >= 3:
+        logging.info(f"[DB] ✅ {count} custom indexes verified")
+    else:
+        logging.warning(f"[DB] ⚠️  Only {count} indexes found. Expected at least 3.")
+
+verify_indexes()
 
 # In-Memory Cache for fast O(1) lookups
 CACHE_VEHICLES = []
@@ -274,17 +335,36 @@ def api_delete_vehicle(plate):
 @app.route("/api/logs", methods=["GET"])
 def api_get_logs():
     try:
+        # Get pagination parameters
+        page = request.args.get('page', 1, type=int)
+        per_page = request.args.get('per_page', 20, type=int)
+        
+        # Validate parameters
+        if page < 1:
+            page = 1
+        if per_page < 1 or per_page > 100:
+            per_page = 20
+        
+        offset = (page - 1) * per_page
+        
         conn = sqlite3.connect(DB_PATH)
         conn.row_factory = sqlite3.Row
+        
+        # Get total count
+        count_query = "SELECT COUNT(*) as total FROM gate_logs"
+        total = conn.execute(count_query).fetchone()['total']
+        
+        # Get paginated logs
         query = """
             SELECT l.plat_nomor, l.entry_time, v.nama_pemilik
             FROM gate_logs l
             LEFT JOIN vehicles v ON l.plat_nomor = v.plat_nomor
             ORDER BY l.entry_time DESC
-            LIMIT 50
+            LIMIT ? OFFSET ?
         """
-        rows = conn.execute(query).fetchall()
+        rows = conn.execute(query, (per_page, offset)).fetchall()
         conn.close()
+        
         logs = []
         for r in rows:
             logs.append({
@@ -293,7 +373,16 @@ def api_get_logs():
                 "name": r["nama_pemilik"],
                 "registered": bool(r["nama_pemilik"])
             })
-        return jsonify(logs)
+        
+        return jsonify({
+            "logs": logs,
+            "pagination": {
+                "page": page,
+                "per_page": per_page,
+                "total": total,
+                "total_pages": (total + per_page - 1) // per_page
+            }
+        })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

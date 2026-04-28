@@ -36,14 +36,28 @@
 
     <!-- ─── Right Panel: Real-Time Logs ────────────────────────────────────── -->
     <div class="panel">
-        <h2 class="section-title">Real-Time Gate Logs</h2>
-        <div class="section-subtitle">Histori kendaraan keluar-masuk gerbang</div>
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+            <div>
+                <h2 class="section-title" style="text-align: left; margin-bottom: 0;">Gate Logs</h2>
+                <div class="section-subtitle" style="text-align: left;">Histori kendaraan keluar-masuk gerbang</div>
+            </div>
+            <button id="btn-refresh-logs" class="refresh-btn" title="Refresh logs">
+                <i class="bi bi-arrow-clockwise"></i>
+            </button>
+        </div>
         
         <div class="logs-container" id="logs-container">
             <!-- Loaded via JS -->
             <div class="spinner-wrap" id="logs-spinner">
                 <div class="spinner"></div> Menunggu data...
             </div>
+        </div>
+
+        <!-- Pagination Controls -->
+        <div class="pagination-controls hidden" id="pagination-controls">
+            <button id="btn-prev" class="pagination-btn">← Prev</button>
+            <span id="page-info" class="page-info">Page 1 of 1</span>
+            <button id="btn-next" class="pagination-btn">Next →</button>
         </div>
     </div>
 
@@ -83,7 +97,7 @@ async function loadVehicles() {
         
         tableBody.innerHTML = '';
         if(data.length === 0) {
-            tableBody.innerHTML = `<tr><td colspan="3" style="text-align:center; color:gray;">Belum ada kendaraan</td></tr>`;
+            tableBody.innerHTML = `<tr><td colspan="3" class="table-empty">Belum ada kendaraan</td></tr>`;
             return;
         }
 
@@ -91,7 +105,7 @@ async function loadVehicles() {
             const tr = document.createElement('tr');
             const safeName = v.name.replace(/'/g, "\\'");
             tr.innerHTML = `
-                <td style="font-weight:bold; color:var(--blue);">${v.plate}</td>
+                <td class="table-plate-cell">${v.plate}</td>
                 <td>${v.name}</td>
                 <td>
                     <button class="btn-edit" onclick="editVehicle('${v.plate}', '${safeName}')">Edit</button>
@@ -107,20 +121,30 @@ async function loadVehicles() {
 
 /* ─── Fetch & Render Logs ────────────────────────────────────────────────── */
 let currentLogsJSON = "";
-async function loadLogs() {
+let currentPage = 1;
+const perPage = 20;
+
+async function loadLogs(page = currentPage) {
     try {
-        const res = await fetch('/api/logs');
-        const logsText = await res.text();
+        const res = await fetch(`/api/logs?page=${page}&per_page=${perPage}`);
+        const data = await res.json();
         
-        // Anti-flicker: Jangan render ulang jika tidak ada data log baru
-        if (logsText === currentLogsJSON) return;
-        currentLogsJSON = logsText;
+        if (!data.logs) {
+            console.error("Invalid response format");
+            return;
+        }
+
+        const logs = data.logs;
+        const pagination = data.pagination;
         
-        const logs = JSON.parse(logsText);
+        // Update current page
+        currentPage = pagination.page;
         
+        // Render logs
         logsContainer.innerHTML = '';
         if(logs.length === 0) {
-            logsContainer.innerHTML = `<div style="text-align:center; color:gray; padding-top:20px;">Belum ada histori logs</div>`;
+            logsContainer.innerHTML = `<div class="empty-state">Belum ada histori logs</div>`;
+            document.getElementById('pagination-controls').classList.add('hidden');
             return;
         }
 
@@ -147,17 +171,17 @@ async function loadLogs() {
             const timeStr = timeParts[1] || '';
 
             div.innerHTML = `
-                <div style="display:flex; flex-direction:column; gap:6px;">
-                    <div style="font-size:0.75rem; color:#888;">
-                        <i class="bi bi-clock" style="margin-right:4px;"></i> ${timeStr} 
-                        <span style="margin-left:8px; opacity:0.5;">${dateStr}</span>
+                <div class="flex flex-col gap-2">
+                    <div class="log-timestamp">
+                        <i class="bi bi-clock"></i> ${timeStr} 
+                        <span class="log-timestamp-date">${dateStr}</span>
                     </div>
-                    <div style="font-family:'Consolas', monospace; font-size:1.15rem; font-weight:bold; letter-spacing:1px; color:#fff;">
+                    <div class="log-plate-text">
                         ${log.plate}
                     </div>
                     ${isReg ? `
-                    <div style="font-size:0.85rem; color:#bbb;">
-                        <i class="bi bi-person-badge" style="margin-right:4px;"></i> ${log.name}
+                    <div class="log-owner">
+                        <i class="bi bi-person-badge"></i> ${log.name}
                     </div>
                     ` : ''}
                 </div>
@@ -167,10 +191,53 @@ async function loadLogs() {
             `;
             logsContainer.appendChild(div);
         });
+
+        // Update pagination controls
+        updatePaginationControls(pagination);
+        
     } catch(err) {
         console.error("Gagal load logs", err);
     }
 }
+
+function updatePaginationControls(pagination) {
+    const controls = document.getElementById('pagination-controls');
+    const pageInfo = document.getElementById('page-info');
+    const btnPrev = document.getElementById('btn-prev');
+    const btnNext = document.getElementById('btn-next');
+    
+    if (pagination.total_pages <= 1) {
+        controls.classList.add('hidden');
+        return;
+    }
+    
+    controls.classList.remove('hidden');
+    pageInfo.textContent = `Page ${pagination.page} of ${pagination.total_pages} (${pagination.total} total)`;
+    
+    btnPrev.disabled = pagination.page <= 1;
+    btnNext.disabled = pagination.page >= pagination.total_pages;
+}
+
+// Pagination button handlers
+document.getElementById('btn-prev').addEventListener('click', () => {
+    if (currentPage > 1) {
+        loadLogs(currentPage - 1);
+    }
+});
+
+document.getElementById('btn-next').addEventListener('click', () => {
+    loadLogs(currentPage + 1);
+});
+
+// Manual refresh button handler
+document.getElementById('btn-refresh-logs').addEventListener('click', function() {
+    this.classList.add('spinning');
+    loadLogs(currentPage).finally(() => {
+        setTimeout(() => {
+            this.classList.remove('spinning');
+        }, 600);
+    });
+});
 
 /* ─── Add Vehicle ────────────────────────────────────────────────────────── */
 btnAdd.addEventListener('click', async () => {
@@ -256,7 +323,47 @@ function showMsg(text, typeClass) {
 /* ─── Init & Polling ─────────────────────────────────────────────────────── */
 loadVehicles();
 loadLogs();
-setInterval(loadLogs, 2000); // Poll logs every 2 seconds
+
+// Smart polling: Only poll when page is visible
+let logsPollingInterval = null;
+
+function startLogsPolling() {
+    // Clear existing interval if any
+    if (logsPollingInterval) {
+        clearInterval(logsPollingInterval);
+    }
+    
+    // Poll every 10 seconds (reduced from 2 seconds)
+    logsPollingInterval = setInterval(() => {
+        // Only poll if page is visible
+        if (!document.hidden) {
+            loadLogs();
+        }
+    }, 10000);
+}
+
+function stopLogsPolling() {
+    if (logsPollingInterval) {
+        clearInterval(logsPollingInterval);
+        logsPollingInterval = null;
+    }
+}
+
+// Start polling
+startLogsPolling();
+
+// Pause polling when page is hidden, resume when visible
+document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+        stopLogsPolling();
+    } else {
+        loadLogs(); // Refresh immediately when page becomes visible
+        startLogsPolling();
+    }
+});
+
+// Stop polling when user leaves page
+window.addEventListener('beforeunload', stopLogsPolling);
 
 </script>
 {% endblock %}

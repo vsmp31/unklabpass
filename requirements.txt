@@ -1,9 +1,0 @@
-flask
-pandas
-numpy
-python-dotenv
-ultralytics
-opencv-python-headless
-pillow
-jinja2
-easyocr
