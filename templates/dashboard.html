@@ -17,6 +17,15 @@
 
         <div id="crud-msg" class="toast"></div>
 
+        <!-- Search Vehicle -->
+        <div class="search-box">
+            <i class="bi bi-search"></i>
+            <input type="text" id="search-vehicle" placeholder="Cari plat nomor atau nama pemilik..." class="search-input" autocomplete="off">
+            <button id="btn-clear-vehicle-search" class="clear-search-btn hidden">
+                <i class="bi bi-x"></i>
+            </button>
+        </div>
+
         <!-- Vehicle List -->
         <div class="vehicle-list-wrapper">
             <table class="up-table">
@@ -45,6 +54,15 @@
                 <i class="bi bi-arrow-clockwise"></i>
             </button>
         </div>
+
+        <!-- Search Logs -->
+        <div class="search-box">
+            <i class="bi bi-search"></i>
+            <input type="text" id="search-logs" placeholder="Cari plat nomor atau nama pemilik..." class="search-input" autocomplete="off">
+            <button id="btn-clear-logs-search" class="clear-search-btn hidden">
+                <i class="bi bi-x"></i>
+            </button>
+        </div>
         
         <div class="logs-container" id="logs-container">
             <!-- Loaded via JS -->
@@ -71,8 +89,15 @@ const btnAdd = document.getElementById('btn-add');
 const inputPlate = document.getElementById('input-plate');
 const inputName = document.getElementById('input-name');
 const crudMsg = document.getElementById('crud-msg');
+const searchVehicleInput = document.getElementById('search-vehicle');
+const searchLogsInput = document.getElementById('search-logs');
+const btnClearVehicleSearch = document.getElementById('btn-clear-vehicle-search');
+const btnClearLogsSearch = document.getElementById('btn-clear-logs-search');
 
 let editModePlate = null;
+let vehicleSearchQuery = '';
+let logsSearchQuery = '';
+
 const btnCancel = document.createElement('button');
 btnCancel.className = 'up-btn';
 btnCancel.style.backgroundColor = '#6c757d';
@@ -90,14 +115,16 @@ btnCancel.onclick = () => {
 };
 
 /* ─── Fetch & Render Vehicles ────────────────────────────────────────────── */
-async function loadVehicles() {
+async function loadVehicles(search = '') {
     try {
-        const res = await fetch('/api/vehicles');
+        const url = search ? `/api/vehicles?search=${encodeURIComponent(search)}` : '/api/vehicles';
+        const res = await fetch(url);
         const data = await res.json();
         
         tableBody.innerHTML = '';
         if(data.length === 0) {
-            tableBody.innerHTML = `<tr><td colspan="3" class="table-empty">Belum ada kendaraan</td></tr>`;
+            const msg = search ? `Tidak ada hasil untuk "${search}"` : 'Belum ada kendaraan';
+            tableBody.innerHTML = `<tr><td colspan="3" class="table-empty">${msg}</td></tr>`;
             return;
         }
 
@@ -124,9 +151,14 @@ let currentLogsJSON = "";
 let currentPage = 1;
 const perPage = 20;
 
-async function loadLogs(page = currentPage) {
+async function loadLogs(page = currentPage, search = '') {
     try {
-        const res = await fetch(`/api/logs?page=${page}&per_page=${perPage}`);
+        let url = `/api/logs?page=${page}&per_page=${perPage}`;
+        if (search) {
+            url += `&search=${encodeURIComponent(search)}`;
+        }
+        
+        const res = await fetch(url);
         const data = await res.json();
         
         if (!data.logs) {
@@ -143,7 +175,8 @@ async function loadLogs(page = currentPage) {
         // Render logs
         logsContainer.innerHTML = '';
         if(logs.length === 0) {
-            logsContainer.innerHTML = `<div class="empty-state">Belum ada histori logs</div>`;
+            const msg = search ? `Tidak ada hasil untuk "${search}"` : 'Belum ada histori logs';
+            logsContainer.innerHTML = `<div class="empty-state">${msg}</div>`;
             document.getElementById('pagination-controls').classList.add('hidden');
             return;
         }
@@ -221,22 +254,81 @@ function updatePaginationControls(pagination) {
 // Pagination button handlers
 document.getElementById('btn-prev').addEventListener('click', () => {
     if (currentPage > 1) {
-        loadLogs(currentPage - 1);
+        loadLogs(currentPage - 1, logsSearchQuery);
     }
 });
 
 document.getElementById('btn-next').addEventListener('click', () => {
-    loadLogs(currentPage + 1);
+    loadLogs(currentPage + 1, logsSearchQuery);
 });
 
 // Manual refresh button handler
 document.getElementById('btn-refresh-logs').addEventListener('click', function() {
     this.classList.add('spinning');
-    loadLogs(currentPage).finally(() => {
+    loadLogs(currentPage, logsSearchQuery).finally(() => {
         setTimeout(() => {
             this.classList.remove('spinning');
         }, 600);
     });
+});
+
+/* ─── Search Handlers ────────────────────────────────────────────────────── */
+// Vehicle search with debounce
+let vehicleSearchTimeout;
+searchVehicleInput.addEventListener('input', (e) => {
+    const query = e.target.value.trim();
+    vehicleSearchQuery = query;
+    
+    // Show/hide clear button
+    if (query) {
+        btnClearVehicleSearch.classList.remove('hidden');
+    } else {
+        btnClearVehicleSearch.classList.add('hidden');
+    }
+    
+    // Debounce search
+    clearTimeout(vehicleSearchTimeout);
+    vehicleSearchTimeout = setTimeout(() => {
+        loadVehicles(query);
+    }, 300);
+});
+
+// Clear vehicle search
+btnClearVehicleSearch.addEventListener('click', () => {
+    searchVehicleInput.value = '';
+    vehicleSearchQuery = '';
+    btnClearVehicleSearch.classList.add('hidden');
+    loadVehicles();
+});
+
+// Logs search with debounce
+let logsSearchTimeout;
+searchLogsInput.addEventListener('input', (e) => {
+    const query = e.target.value.trim();
+    logsSearchQuery = query;
+    
+    // Show/hide clear button
+    if (query) {
+        btnClearLogsSearch.classList.remove('hidden');
+    } else {
+        btnClearLogsSearch.classList.add('hidden');
+    }
+    
+    // Debounce search and reset to page 1
+    clearTimeout(logsSearchTimeout);
+    logsSearchTimeout = setTimeout(() => {
+        currentPage = 1;
+        loadLogs(1, query);
+    }, 300);
+});
+
+// Clear logs search
+btnClearLogsSearch.addEventListener('click', () => {
+    searchLogsInput.value = '';
+    logsSearchQuery = '';
+    btnClearLogsSearch.classList.add('hidden');
+    currentPage = 1;
+    loadLogs(1);
 });
 
 /* ─── Add Vehicle ────────────────────────────────────────────────────────── */
@@ -260,7 +352,7 @@ btnAdd.addEventListener('click', async () => {
             if(result.success) {
                 showMsg('Data berhasil diubah!', 'toast-success');
                 btnCancel.click(); // Reset state
-                loadVehicles();
+                loadVehicles(vehicleSearchQuery);
             } else {
                 showMsg('Gagal: ' + result.error, 'toast-error');
             }
@@ -275,7 +367,7 @@ btnAdd.addEventListener('click', async () => {
                 showMsg('Kendaraan berhasil ditambahkan!', 'toast-success');
                 inputPlate.value = '';
                 inputName.value = '';
-                loadVehicles();
+                loadVehicles(vehicleSearchQuery);
             } else {
                 showMsg('Gagal: ' + result.error, 'toast-error');
             }
@@ -304,7 +396,7 @@ window.deleteVehicle = async function(plate) {
         const result = await res.json();
         if(result.success) {
             showMsg('Kendaraan dihapus!', 'toast-success');
-            loadVehicles();
+            loadVehicles(vehicleSearchQuery);
         } else {
             showMsg('Gagal menghapus: ' + result.error, 'toast-error');
         }
@@ -337,7 +429,7 @@ function startLogsPolling() {
     logsPollingInterval = setInterval(() => {
         // Only poll if page is visible
         if (!document.hidden) {
-            loadLogs();
+            loadLogs(currentPage, logsSearchQuery);
         }
     }, 10000);
 }
@@ -357,7 +449,7 @@ document.addEventListener('visibilitychange', () => {
     if (document.hidden) {
         stopLogsPolling();
     } else {
-        loadLogs(); // Refresh immediately when page becomes visible
+        loadLogs(currentPage, logsSearchQuery); // Refresh immediately when page becomes visible
         startLogsPolling();
     }
 });

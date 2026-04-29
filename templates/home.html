@@ -30,6 +30,10 @@
                     <span class="log-time">[--:--:--]</span>
                     <span class="log-badge nfo">[SYS]</span> YOLOv8 + EasyOCR loaded at startup.
                 </div>
+                <div class="log-line info">
+                    <span class="log-time">[--:--:--]</span>
+                    <span class="log-badge nfo">[DB]</span> Database loaded to cache: <span id="db-info">vehicles.db</span>
+                </div>
             </div>
         </div>
 
@@ -124,6 +128,9 @@
 
     // Tidak auto-start, tunggu user klik tombol
     window.addEventListener('DOMContentLoaded', () => {
+        // Load database info on startup
+        loadDatabaseInfo();
+        
         const startBtn = document.getElementById('start-camera-btn');
         startBtn.addEventListener('click', async () => {
             startBtn.disabled = true;
@@ -139,6 +146,17 @@
             }
         });
     });
+
+    async function loadDatabaseInfo() {
+        try {
+            const resp = await fetch('/api/vehicles');
+            const vehicles = await resp.json();
+            const dbInfo = document.getElementById('db-info');
+            dbInfo.textContent = `vehicles.db (${vehicles.length} vehicles)`;
+        } catch (err) {
+            console.error('Failed to load database info:', err);
+        }
+    }
 
     async function startCamera() {
         try {

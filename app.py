@@ -266,7 +266,26 @@ def dashboard():
 
 @app.route("/api/vehicles", methods=["GET"])
 def api_get_vehicles():
-    return jsonify(load_vehicles())
+    search = request.args.get('search', '').strip()
+    
+    if search:
+        # Search by plate or name
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        query = """
+            SELECT plat_nomor, nama_pemilik 
+            FROM vehicles 
+            WHERE plat_nomor LIKE ? OR nama_pemilik LIKE ?
+            ORDER BY plat_nomor
+        """
+        search_pattern = f"%{search}%"
+        rows = conn.execute(query, (search_pattern, search_pattern)).fetchall()
+        conn.close()
+        
+        vehicles = [{"plate": r["plat_nomor"], "name": r["nama_pemilik"]} for r in rows]
+        return jsonify(vehicles)
+    else:
+        return jsonify(load_vehicles())
 
 @app.route("/api/vehicles", methods=["POST"])
 def api_add_vehicle():
@@ -338,6 +357,7 @@ def api_get_logs():
         # Get pagination parameters
         page = request.args.get('page', 1, type=int)
         per_page = request.args.get('per_page', 20, type=int)
+        search = request.args.get('search', '').strip()
         
         # Validate parameters
         if page < 1:
@@ -350,19 +370,42 @@ def api_get_logs():
         conn = sqlite3.connect(DB_PATH)
         conn.row_factory = sqlite3.Row
         
-        # Get total count
-        count_query = "SELECT COUNT(*) as total FROM gate_logs"
-        total = conn.execute(count_query).fetchone()['total']
+        # Build query based on search
+        if search:
+            # Search by plate or name
+            count_query = """
+                SELECT COUNT(*) as total 
+                FROM gate_logs l
+                LEFT JOIN vehicles v ON l.plat_nomor = v.plat_nomor
+                WHERE l.plat_nomor LIKE ? OR v.nama_pemilik LIKE ?
+            """
+            search_pattern = f"%{search}%"
+            total = conn.execute(count_query, (search_pattern, search_pattern)).fetchone()['total']
+            
+            query = """
+                SELECT l.plat_nomor, l.entry_time, v.nama_pemilik
+                FROM gate_logs l
+                LEFT JOIN vehicles v ON l.plat_nomor = v.plat_nomor
+                WHERE l.plat_nomor LIKE ? OR v.nama_pemilik LIKE ?
+                ORDER BY l.entry_time DESC
+                LIMIT ? OFFSET ?
+            """
+            rows = conn.execute(query, (search_pattern, search_pattern, per_page, offset)).fetchall()
+        else:
+            # Get total count
+            count_query = "SELECT COUNT(*) as total FROM gate_logs"
+            total = conn.execute(count_query).fetchone()['total']
+            
+            # Get paginated logs
+            query = """
+                SELECT l.plat_nomor, l.entry_time, v.nama_pemilik
+                FROM gate_logs l
+                LEFT JOIN vehicles v ON l.plat_nomor = v.plat_nomor
+                ORDER BY l.entry_time DESC
+                LIMIT ? OFFSET ?
+            """
+            rows = conn.execute(query, (per_page, offset)).fetchall()
         
-        # Get paginated logs
-        query = """
-            SELECT l.plat_nomor, l.entry_time, v.nama_pemilik
-            FROM gate_logs l
-            LEFT JOIN vehicles v ON l.plat_nomor = v.plat_nomor
-            ORDER BY l.entry_time DESC
-            LIMIT ? OFFSET ?
-        """
-        rows = conn.execute(query, (per_page, offset)).fetchall()
         conn.close()
         
         logs = []

@@ -19,12 +19,15 @@
             <a id="nav-dash"  class="up-nav-link {% if page == 'dashboard' %}active{% endif %}" href="/dashboard">Dashboard</a>
             <a id="nav-about" class="up-nav-link {% if page == 'about' %}active{% endif %}" href="/about">About</a>
             {% if session.get('logged_in') %}
-            <a class="up-nav-link" style="color:#ff5f57; font-weight:bold; margin-left:15px;" href="/logout">
+            <a class="up-nav-link" style="color:var(--error-alt); font-weight:bold; margin-left:15px;" href="/logout">
                 <i class="bi bi-box-arrow-right"></i> Logout
             </a>
             {% endif %}
         </div>
         <div class="up-brand">
+            <button id="theme-toggle" class="theme-toggle" title="Toggle theme">
+                <i class="bi bi-moon-fill" id="theme-icon"></i>
+            </button>
             <span class="up-brand-name">UnklabPass</span>
             <img src="{{ url_for('static', filename='images/unklabpass.png') }}"
                  alt="UnklabPass Logo" class="up-logo">
@@ -35,6 +38,36 @@
     <main class="main-content">
         {% block content %}{% endblock %}
     </main>
+
+    <!-- ─── Theme Toggle Script ─────────────────────────────────────────── -->
+    <script>
+        // Theme toggle functionality
+        const themeToggle = document.getElementById('theme-toggle');
+        const themeIcon = document.getElementById('theme-icon');
+        const html = document.documentElement;
+        
+        // Load saved theme or default to dark
+        const savedTheme = localStorage.getItem('theme') || 'dark';
+        html.setAttribute('data-theme', savedTheme);
+        updateThemeIcon(savedTheme);
+        
+        themeToggle.addEventListener('click', () => {
+            const currentTheme = html.getAttribute('data-theme');
+            const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+            
+            html.setAttribute('data-theme', newTheme);
+            localStorage.setItem('theme', newTheme);
+            updateThemeIcon(newTheme);
+        });
+        
+        function updateThemeIcon(theme) {
+            if (theme === 'dark') {
+                themeIcon.className = 'bi bi-moon-fill';
+            } else {
+                themeIcon.className = 'bi bi-sun-fill';
+            }
+        }
+    </script>
 
 </body>
 </html>
