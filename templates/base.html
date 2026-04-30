@@ -13,6 +13,40 @@
 <body>
 
     <!-- ─── Navbar ──────────────────────────────────────────────────────── -->
+    {% if page == 'dashboard' %}
+    <!-- Dashboard Navbar -->
+    <nav class="up-nav dashboard-nav" role="navigation" aria-label="Dashboard navigation">
+        <div class="up-nav-links">
+            <a href="/" class="back-to-home-btn" title="Kembali ke Home">
+                <i class="bi bi-house-door-fill"></i>
+            </a>
+            <span class="dashboard-title">Dashboard</span>
+        </div>
+        <div class="up-brand">
+            <div class="user-menu">
+                <button class="user-avatar-btn" id="user-menu-toggle">
+                    <div class="avatar-circle">
+                        <i class="bi bi-person-fill"></i>
+                    </div>
+                    <span class="username-text">{{ session.get('username', 'User') }}</span>
+                    <i class="bi bi-chevron-down dropdown-icon"></i>
+                </button>
+                <div class="user-dropdown hidden" id="user-dropdown">
+                    <button class="dropdown-item" id="theme-toggle-dropdown">
+                        <i class="bi bi-moon-fill" id="theme-icon-dropdown"></i>
+                        <span id="theme-text">Dark Mode</span>
+                    </button>
+                    <div class="dropdown-divider"></div>
+                    <a href="/logout" class="dropdown-item logout-item">
+                        <i class="bi bi-box-arrow-right"></i>
+                        <span>Logout</span>
+                    </a>
+                </div>
+            </div>
+        </div>
+    </nav>
+    {% else %}
+    <!-- Regular Navbar -->
     <nav class="up-nav" role="navigation" aria-label="Main navigation">
         <div class="up-nav-links">
             <a id="nav-home"  class="up-nav-link {% if page == 'home'  %}active{% endif %}" href="/">Home</a>
@@ -33,6 +67,7 @@
                  alt="UnklabPass Logo" class="up-logo">
         </div>
     </nav>
+    {% endif %}
 
     <!-- ─── Page Content ────────────────────────────────────────────────── -->
     <main class="main-content">
@@ -49,22 +84,75 @@
         // Load saved theme or default to dark
         const savedTheme = localStorage.getItem('theme') || 'dark';
         html.setAttribute('data-theme', savedTheme);
-        updateThemeIcon(savedTheme);
         
-        themeToggle.addEventListener('click', () => {
-            const currentTheme = html.getAttribute('data-theme');
-            const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+        if (themeToggle && themeIcon) {
+            updateThemeIcon(savedTheme);
             
-            html.setAttribute('data-theme', newTheme);
-            localStorage.setItem('theme', newTheme);
-            updateThemeIcon(newTheme);
-        });
+            themeToggle.addEventListener('click', () => {
+                const currentTheme = html.getAttribute('data-theme');
+                const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+                
+                html.setAttribute('data-theme', newTheme);
+                localStorage.setItem('theme', newTheme);
+                updateThemeIcon(newTheme);
+            });
+        }
         
         function updateThemeIcon(theme) {
-            if (theme === 'dark') {
-                themeIcon.className = 'bi bi-moon-fill';
-            } else {
-                themeIcon.className = 'bi bi-sun-fill';
+            if (themeIcon) {
+                if (theme === 'dark') {
+                    themeIcon.className = 'bi bi-moon-fill';
+                } else {
+                    themeIcon.className = 'bi bi-sun-fill';
+                }
+            }
+        }
+        
+        // Dashboard user menu functionality
+        const userMenuToggle = document.getElementById('user-menu-toggle');
+        const userDropdown = document.getElementById('user-dropdown');
+        const themeToggleDropdown = document.getElementById('theme-toggle-dropdown');
+        const themeIconDropdown = document.getElementById('theme-icon-dropdown');
+        const themeText = document.getElementById('theme-text');
+        
+        if (userMenuToggle && userDropdown) {
+            // Toggle dropdown
+            userMenuToggle.addEventListener('click', (e) => {
+                e.stopPropagation();
+                userDropdown.classList.toggle('hidden');
+            });
+            
+            // Close dropdown when clicking outside
+            document.addEventListener('click', (e) => {
+                if (!userMenuToggle.contains(e.target) && !userDropdown.contains(e.target)) {
+                    userDropdown.classList.add('hidden');
+                }
+            });
+            
+            // Theme toggle in dropdown
+            if (themeToggleDropdown) {
+                updateDropdownThemeIcon(savedTheme);
+                
+                themeToggleDropdown.addEventListener('click', () => {
+                    const currentTheme = html.getAttribute('data-theme');
+                    const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+                    
+                    html.setAttribute('data-theme', newTheme);
+                    localStorage.setItem('theme', newTheme);
+                    updateDropdownThemeIcon(newTheme);
+                });
+            }
+        }
+        
+        function updateDropdownThemeIcon(theme) {
+            if (themeIconDropdown && themeText) {
+                if (theme === 'dark') {
+                    themeIconDropdown.className = 'bi bi-moon-fill';
+                    themeText.textContent = 'Dark Mode';
+                } else {
+                    themeIconDropdown.className = 'bi bi-sun-fill';
+                    themeText.textContent = 'Light Mode';
+                }
             }
         }
     </script>

@@ -1,9 +1,9 @@
 """
 plate_detector.py
 ─────────────────
-Two-stage pipeline:
-  1. YOLO (best.pt) — general object detection (draws colored boxes on everything)
-  2. EasyOCR  — plate text reading (checks against lecturer DB)
+Pipeline 2 tahap untuk deteksi plat nomor:
+  1. YOLOv8 (best.pt) — deteksi objek umum (gambar kotak berwarna pada semua objek)
+  2. EasyOCR — baca text plat nomor (cek dengan database kendaraan terdaftar)
 """
 
 import cv2
@@ -17,8 +17,8 @@ from ultralytics import YOLO
 
 log = logging.getLogger(__name__)
 
-# ── Eager-load both models at import time ─────────────────────────────────────
-# This ensures they are ready before the first HTTP request arrives.
+# ═══ Load Model saat Import (Eager Loading) ═══════════════════════════════════
+# Memastikan model sudah siap sebelum HTTP request pertama datang
 log.info("[YOLO] Loading custom best.pt…")
 MODEL_PATH = os.path.join(os.path.dirname(__file__), "model", "best.pt")
 _yolo: YOLO = YOLO(MODEL_PATH)
@@ -30,18 +30,21 @@ log.info("[OCR] EasyOCR ready.")
 
 
 def get_reader() -> easyocr.Reader:
+    """Return instance EasyOCR reader yang sudah di-load"""
     return _reader
 
 
 def get_yolo() -> YOLO:
+    """Return instance YOLO model yang sudah di-load"""
     return _yolo
 
 
-# ── Image helpers ──────────────────────────────────────────────────────────────
+# ═══ Helper Functions untuk Image Processing ══════════════════════════════════
 
 def decode_b64(b64: str) -> np.ndarray:
+    """Decode base64 string menjadi OpenCV image (numpy array)"""
     if "," in b64:
-        b64 = b64.split(",", 1)[1]
+        b64 = b64.split(",", 1)[1]  # Remove data:image/jpeg;base64, prefix
     arr = np.frombuffer(base64.b64decode(b64), np.uint8)
     img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
     if img is None:
@@ -49,12 +52,15 @@ def decode_b64(b64: str) -> np.ndarray:
     return img
 
 
-# ── YOLO object detection ──────────────────────────────────────────────────────
+# ═══ YOLO Object Detection ════════════════════════════════════════════════════
 
 def _boost_frame(img: np.ndarray) -> np.ndarray:
-    """Brighten dark frames so YOLO can detect objects in low-light conditions."""
+    """
+    Tingkatkan brightness frame gelap agar YOLO bisa deteksi objek di kondisi low-light
+    Menggunakan CLAHE (Contrast Limited Adaptive Histogram Equalization)
+    """
     mean_lum = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY).mean()
-    if mean_lum < 80:          # dark frame → apply CLAHE + brightness boost
+    if mean_lum < 80:  # Frame gelap → apply CLAHE + brightness boost
         lab  = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
         l, a, b = cv2.split(lab)
         clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
@@ -65,8 +71,9 @@ def _boost_frame(img: np.ndarray) -> np.ndarray:
 
 def detect_objects(img: np.ndarray) -> list[dict]:
     """
-    Run YOLOv8n on the frame (with dark-frame boost).
-    Returns list of dicts: {x, y, w, h, label, class_name, class_id, conf, is_registered}
+    Jalankan YOLOv8 pada frame (dengan boost untuk frame gelap)
+    Returns: list of dicts dengan info bounding box dan class
+    Format: {x, y, w, h, label, class_name, class_id, conf, is_registered}
     """
     model  = get_yolo()
     bright = _boost_frame(img)
@@ -93,19 +100,23 @@ def detect_objects(img: np.ndarray) -> list[dict]:
     return boxes
 
 
-# ── OCR + plate matching ───────────────────────────────────────────────────────
+# ═══ OCR + Plate Matching ══════════════════════════════════════════════════════
 
 def ocr_frame(img: np.ndarray) -> str:
-    """Run EasyOCR on the frame for plate text."""
+    """
+    Jalankan EasyOCR pada frame untuk baca text plat nomor
+    Returns: cleaned plate text (format: DB1234ABC)
+    """
     reader = get_reader()
     gray   = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     
-    # Upscale if image is small to improve OCR accuracy
+    # Upscale jika image terlalu kecil untuk improve akurasi OCR
     h, w = gray.shape[:2]
     if w < 300:
         scale = 300 / w
         gray = cv2.resize(gray, (0, 0), fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
 
+    # Jalankan OCR dengan allowlist karakter plat nomor
     result = reader.readtext(
         gray,
         allowlist="ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ",
@@ -119,7 +130,7 @@ def ocr_frame(img: np.ndarray) -> str:
 
     raw_text = " ".join(r[1] for r in result if r[2] >= 0.10).strip()
     
-    # Strictly match 'DB' plates and discard expiration year
+    # Strictly match format plat 'DB' dan buang tahun kadaluarsa
     match = re.search(r"(DB)\s*(\d{1,4})\s*([A-Z]{0,3})", raw_text.upper())
     if match:
         cleaned = "".join(g for g in match.groups() if g).strip()
@@ -130,10 +141,16 @@ def ocr_frame(img: np.ndarray) -> str:
 
 
 def match_plate(text: str, lecturers: list[dict]) -> dict | None:
+    """
+    Cocokkan text OCR dengan database kendaraan terdaftar
+    Menggunakan Levenshtein Distance untuk toleransi 1 karakter salah
+    Returns: dict vehicle data jika match, None jika tidak
+    """
     ocr = text
     if len(ocr) < 4:
         return None
-        
+    
+    # Fungsi hitung Levenshtein Distance (edit distance)
     def levenshtein(s1: str, s2: str) -> int:
         if len(s1) < len(s2):
             return levenshtein(s2, s1)
@@ -150,51 +167,57 @@ def match_plate(text: str, lecturers: list[dict]) -> dict | None:
             prev_row = curr_row
         return prev_row[-1]
 
+    # Loop semua kendaraan di database
     for lec in lecturers:
         db = lec.get("plate", "")
         if not db:
             continue
-            
+        
+        # Exact match
         if ocr == db:
             return lec
-            
-        # Toleransi 1 karakter meleset (Levenshtein Distance) untuk plat >= 6 digit
+        
+        # Toleransi 1 karakter meleset untuk plat >= 6 digit
         if len(ocr) >= 6 and len(db) >= 6 and levenshtein(ocr, db) <= 1:
             return lec
-            
+        
+        # Substring match untuk plat >= 5 digit
         if len(ocr) >= 5 and len(db) >= 5 and (ocr in db or db in ocr):
             return lec
             
     return None
 
 
-# ── Main entry point ───────────────────────────────────────────────────────────
+# ═══ Main Entry Point ══════════════════════════════════════════════════════════
 
 def analyze_frame(b64_image: str, lecturers: list[dict]) -> dict:
     """
-    1. Decode frame
-    2. YOLO (best.pt) → detect license plates
-    3. Crop detected plate region(s)
-    4. EasyOCR → read text from cropped region
-    5. Match against lecturer DB
+    Pipeline lengkap untuk analyze frame:
+    1. Decode base64 image
+    2. YOLO (best.pt) → deteksi plat nomor
+    3. Crop region plat yang terdeteksi
+    4. EasyOCR → baca text dari cropped region
+    5. Match dengan database kendaraan terdaftar
+    
+    Returns: dict dengan info hasil deteksi dan matching
     """
     img     = decode_b64(b64_image)
     fh, fw  = img.shape[:2]
 
-    # ── Stage 1: object detection ─────────────────────────────────────────────
+    # ═══ Stage 1: Object Detection dengan YOLO ════════════════════════════════
     yolo_boxes = detect_objects(img)
 
-    # ── Stage 2: Crop & OCR ───────────────────────────────────────────────────
+    # ═══ Stage 2: Crop & OCR ══════════════════════════════════════════════════
     ocr_text = ""
     matched = None
 
     if yolo_boxes:
-        # Sort boxes by confidence descending
+        # Sort boxes berdasarkan confidence (tertinggi dulu)
         sorted_boxes = sorted(yolo_boxes, key=lambda b: b.get("conf", 0.0), reverse=True)
         
         for box in sorted_boxes:
             bx, by, bw, bh = box["x"], box["y"], box["w"], box["h"]
-            # Add padding (15% for more context)
+            # Tambah padding 15% untuk context lebih baik
             pad_x = int(bw * 0.15)
             pad_y = int(bh * 0.15)
             x1 = max(0, bx - pad_x)
@@ -202,29 +225,31 @@ def analyze_frame(b64_image: str, lecturers: list[dict]) -> dict:
             x2 = min(fw, bx + bw + pad_x)
             y2 = min(fh, by + bh + pad_y)
             
+            # Crop region plat
             crop_img = img[y1:y2, x1:x2]
             if crop_img.size > 0:
                 text = ocr_frame(crop_img)
                 if text:
-                    # Check if this plate matches DB
+                    # Cek apakah plat ini match dengan database
                     m = match_plate(text, lecturers)
                     if m:
                         matched = m
                         ocr_text = text
-                        break
-                    # Keep the first OCR text if no match found later
+                        break  # Stop jika sudah ketemu match
+                    # Simpan OCR text pertama jika tidak ada match
                     if not ocr_text:
                         ocr_text = text
                         
     else:
-        # Fallback to full frame OCR if YOLO didn't find any plate
+        # Fallback: OCR full frame jika YOLO tidak deteksi plat
         ocr_text = ocr_frame(img)
         if ocr_text:
             matched = match_plate(ocr_text, lecturers)
 
+    # Ambil plat nomor dari matched vehicle atau OCR text
     plate = matched["plate"] if matched else ocr_text
 
-    # Flag all boxes as registered if matched (for frontend color)
+    # Flag semua boxes sebagai registered jika match (untuk warna di frontend)
     if matched:
         for box in yolo_boxes:
             box["is_registered"] = True

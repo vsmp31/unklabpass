@@ -1,29 +1,37 @@
 {% extends "base.html" %}
 
 {% block content %}
+<!-- ─── Toast Notification (Global) ────────────────────────────────────────── -->
+<div id="crud-msg" class="toast-notification"></div>
+
 <div class="page-grid">
     
     <!-- ─── Left Panel: CRUD Database ──────────────────────────────────────── -->
     <div class="panel">
-        <h2 class="section-title">Manajemen Database Mobil</h2>
-        <div class="section-subtitle">Tambah, ubah, atau hapus kendaraan terdaftar</div>
-
-        <!-- Add Vehicle Form -->
-        <div class="crud-form">
-            <input type="text" id="input-plate" placeholder="Plat Nomor (ex: DB1234A)" class="up-input" autocomplete="off">
-            <input type="text" id="input-name" placeholder="Nama Pemilik" class="up-input" autocomplete="off">
-            <button id="btn-add" class="up-btn">Tambah Kendaraan</button>
-        </div>
-
-        <div id="crud-msg" class="toast"></div>
-
-        <!-- Search Vehicle -->
-        <div class="search-box">
-            <i class="bi bi-search"></i>
-            <input type="text" id="search-vehicle" placeholder="Cari plat nomor atau nama pemilik..." class="search-input" autocomplete="off">
-            <button id="btn-clear-vehicle-search" class="clear-search-btn hidden">
-                <i class="bi bi-x"></i>
-            </button>
+        <div class="database-header">
+            <h3 class="database-title">Database Kendaraan</h3>
+            <div class="database-actions">
+                <div class="action-btn-wrapper">
+                    <button id="btn-vehicle-search-toggle" class="action-icon-btn" title="Search kendaraan">
+                        <i class="bi bi-search"></i>
+                    </button>
+                    <!-- Search Dropdown -->
+                    <div class="dropdown-popup hidden" id="vehicle-search-dropdown">
+                        <div class="search-box-inline">
+                            <i class="bi bi-search"></i>
+                            <input type="text" id="search-vehicle" placeholder="Cari plat nomor atau nama pemilik..." class="search-input" autocomplete="off">
+                            <button id="btn-clear-vehicle-search" class="clear-search-btn hidden">
+                                <i class="bi bi-x"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                
+                <button id="btn-add-vehicle-modal" class="add-vehicle-btn">
+                    <i class="bi bi-plus-lg"></i>
+                    <span>Tambah Kendaraan</span>
+                </button>
+            </div>
         </div>
 
         <!-- Vehicle List -->
@@ -43,25 +51,176 @@
         </div>
     </div>
 
+    <!-- ─── Modal: Add/Edit Vehicle ────────────────────────────────────────── -->
+    <div class="modal-overlay hidden" id="vehicle-modal">
+        <div class="modal-container">
+            <div class="modal-header">
+                <h3 class="modal-title" id="modal-title">Tambah Kendaraan</h3>
+                <button class="modal-close-btn" id="btn-close-modal">
+                    <i class="bi bi-x-lg"></i>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div class="modal-form">
+                    <div class="form-group">
+                        <label class="form-label">Plat Nomor</label>
+                        <input type="text" id="input-plate" placeholder="DB1234A" class="form-input" autocomplete="off">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Nama Pemilik</label>
+                        <input type="text" id="input-name" placeholder="Nama Pemilik" class="form-input" autocomplete="off">
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button id="btn-cancel" class="modal-btn modal-btn-secondary">Batal</button>
+                <button id="btn-add" class="modal-btn modal-btn-primary">Konfirmasi</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ─── Modal: Delete Confirmation ──────────────────────────────────────── -->
+    <div class="modal-overlay hidden" id="delete-modal">
+        <div class="modal-container modal-container-small">
+            <div class="modal-header">
+                <h3 class="modal-title">Konfirmasi Hapus</h3>
+                <button class="modal-close-btn" id="btn-close-delete-modal">
+                    <i class="bi bi-x-lg"></i>
+                </button>
+            </div>
+            <div class="modal-body">
+                <p class="delete-message">
+                    Yakin ingin menghapus kendaraan <strong id="delete-plate"></strong>?
+                </p>
+            </div>
+            <div class="modal-footer">
+                <button id="btn-cancel-delete" class="modal-btn modal-btn-secondary">Batal</button>
+                <button id="btn-confirm-delete" class="modal-btn modal-btn-danger">Hapus</button>
+            </div>
+        </div>
+    </div>
+
     <!-- ─── Right Panel: Real-Time Logs ────────────────────────────────────── -->
     <div class="panel">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
-            <div>
-                <h2 class="section-title" style="text-align: left; margin-bottom: 0;">Gate Logs</h2>
-                <div class="section-subtitle" style="text-align: left;">Histori kendaraan keluar-masuk gerbang</div>
-            </div>
-            <button id="btn-refresh-logs" class="refresh-btn" title="Refresh logs">
-                <i class="bi bi-arrow-clockwise"></i>
-            </button>
-        </div>
+        <div class="logs-header">
+            <h3 class="logs-title">Logs</h3>
+            <div class="logs-actions">
+                <div class="action-btn-wrapper">
+                    <button id="btn-search-toggle" class="action-icon-btn" title="Search logs">
+                        <i class="bi bi-search"></i>
+                    </button>
+                    <!-- Search Dropdown -->
+                    <div class="dropdown-popup hidden" id="search-dropdown">
+                        <div class="search-box-inline">
+                            <i class="bi bi-search"></i>
+                            <input type="text" id="search-logs" placeholder="Cari plat nomor atau nama pemilik..." class="search-input" autocomplete="off">
+                            <button id="btn-clear-logs-search" class="clear-search-btn hidden">
+                                <i class="bi bi-x"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="action-btn-wrapper">
+                    <button id="btn-filter-toggle" class="action-icon-btn" title="Filter waktu">
+                        <i class="bi bi-funnel"></i>
+                    </button>
+                    <!-- Filter Dropdown -->
+                    <div class="dropdown-popup filter-popup hidden" id="filter-dropdown">
+                        <!-- Status Filter -->
+                        <div class="filter-section-header">Status Kendaraan</div>
+                        <div class="status-filter-tabs">
+                            <button class="status-tab active" data-status="all">
+                                <i class="bi bi-list-ul"></i> Semua
+                            </button>
+                            <button class="status-tab" data-status="registered">
+                                <i class="bi bi-check-circle"></i> Terdaftar
+                            </button>
+                            <button class="status-tab" data-status="unregistered">
+                                <i class="bi bi-exclamation-circle"></i> Tidak Terdaftar
+                            </button>
+                        </div>
 
-        <!-- Search Logs -->
-        <div class="search-box">
-            <i class="bi bi-search"></i>
-            <input type="text" id="search-logs" placeholder="Cari plat nomor atau nama pemilik..." class="search-input" autocomplete="off">
-            <button id="btn-clear-logs-search" class="clear-search-btn hidden">
-                <i class="bi bi-x"></i>
-            </button>
+                        <div class="filter-divider"></div>
+
+                        <!-- Time Filter -->
+                        <div class="filter-section-header">Filter Waktu</div>
+                        <!-- Filter Mode Tabs -->
+                        <div class="filter-tabs">
+                            <button class="filter-tab active" data-mode="range">
+                                <i class="bi bi-calendar-range"></i> Range
+                            </button>
+                            <button class="filter-tab" data-mode="specific">
+                                <i class="bi bi-calendar-check"></i> Spesifik
+                            </button>
+                        </div>
+
+                        <!-- Range Mode -->
+                        <div class="filter-content" id="filter-range">
+                            <div class="filter-row">
+                                <div class="filter-group">
+                                    <label class="filter-label">Dari Tanggal</label>
+                                    <input type="date" id="date-from" class="filter-input">
+                                </div>
+                                <div class="filter-group">
+                                    <label class="filter-label">Sampai Tanggal</label>
+                                    <input type="date" id="date-to" class="filter-input">
+                                </div>
+                            </div>
+                            <div class="filter-row">
+                                <div class="filter-group">
+                                    <label class="filter-label">Dari Jam</label>
+                                    <input type="time" id="time-from" class="filter-input">
+                                </div>
+                                <div class="filter-group">
+                                    <label class="filter-label">Sampai Jam</label>
+                                    <input type="time" id="time-to" class="filter-input">
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Specific Mode -->
+                        <div class="filter-content hidden" id="filter-specific">
+                            <div class="filter-row">
+                                <div class="filter-group">
+                                    <label class="filter-label">Tanggal Spesifik</label>
+                                    <input type="date" id="specific-date" class="filter-input">
+                                </div>
+                            </div>
+                            <div class="filter-row">
+                                <div class="filter-group">
+                                    <label class="filter-label">Dari Jam</label>
+                                    <input type="time" id="specific-time-from" class="filter-input">
+                                </div>
+                                <div class="filter-group">
+                                    <label class="filter-label">Sampai Jam</label>
+                                    <input type="time" id="specific-time-to" class="filter-input">
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Filter Actions -->
+                        <div class="filter-actions">
+                            <button id="btn-apply-filter" class="filter-btn filter-btn-apply">
+                                <i class="bi bi-check-circle"></i> Terapkan
+                            </button>
+                            <button id="btn-clear-filter" class="filter-btn filter-btn-clear">
+                                <i class="bi bi-x-circle"></i> Clear
+                            </button>
+                        </div>
+
+                        <!-- Active Filters Display -->
+                        <div class="active-filters hidden" id="active-filters">
+                            <span class="active-filters-label">Filter Aktif:</span>
+                            <div class="active-filters-tags" id="active-filters-tags"></div>
+                        </div>
+                    </div>
+                </div>
+                
+                <button id="btn-refresh-logs" class="action-icon-btn" title="Refresh logs">
+                    <i class="bi bi-arrow-clockwise"></i>
+                </button>
+            </div>
         </div>
         
         <div class="logs-container" id="logs-container">
@@ -86,6 +245,7 @@
 const tableBody = document.getElementById('vehicle-table-body');
 const logsContainer = document.getElementById('logs-container');
 const btnAdd = document.getElementById('btn-add');
+const btnCancel = document.getElementById('btn-cancel');
 const inputPlate = document.getElementById('input-plate');
 const inputName = document.getElementById('input-name');
 const crudMsg = document.getElementById('crud-msg');
@@ -93,26 +253,132 @@ const searchVehicleInput = document.getElementById('search-vehicle');
 const searchLogsInput = document.getElementById('search-logs');
 const btnClearVehicleSearch = document.getElementById('btn-clear-vehicle-search');
 const btnClearLogsSearch = document.getElementById('btn-clear-logs-search');
+const vehicleModal = document.getElementById('vehicle-modal');
+const modalTitle = document.getElementById('modal-title');
+const btnAddVehicleModal = document.getElementById('btn-add-vehicle-modal');
+const btnCloseModal = document.getElementById('btn-close-modal');
+const deleteModal = document.getElementById('delete-modal');
+const deletePlate = document.getElementById('delete-plate');
+const btnCloseDeleteModal = document.getElementById('btn-close-delete-modal');
+const btnCancelDelete = document.getElementById('btn-cancel-delete');
+const btnConfirmDelete = document.getElementById('btn-confirm-delete');
 
 let editModePlate = null;
+let deleteTargetPlate = null;
 let vehicleSearchQuery = '';
 let logsSearchQuery = '';
 
-const btnCancel = document.createElement('button');
-btnCancel.className = 'up-btn';
-btnCancel.style.backgroundColor = '#6c757d';
-btnCancel.style.marginLeft = '10px';
-btnCancel.textContent = 'Batal';
-btnCancel.style.display = 'none';
-btnAdd.parentNode.appendChild(btnCancel);
+// Filter variables
+let filterMode = 'range'; // 'range' or 'specific'
+let statusFilter = 'all'; // 'all', 'registered', 'unregistered'
+let activeFilters = {
+    dateFrom: '',
+    dateTo: '',
+    timeFrom: '',
+    timeTo: '',
+    specificDate: '',
+    specificTimeFrom: '',
+    specificTimeTo: ''
+};
 
-btnCancel.onclick = () => {
+/* ─── Modal Handlers ─────────────────────────────────────────────────────── */
+// Open modal for adding vehicle
+btnAddVehicleModal.addEventListener('click', () => {
     editModePlate = null;
     inputPlate.value = '';
     inputName.value = '';
-    btnAdd.textContent = 'Tambah Kendaraan';
-    btnCancel.style.display = 'none';
-};
+    modalTitle.textContent = 'Tambah Kendaraan';
+    btnAdd.textContent = 'Konfirmasi';
+    vehicleModal.classList.remove('hidden');
+    setTimeout(() => inputPlate.focus(), 100);
+});
+
+// Close modal
+function closeModal() {
+    vehicleModal.classList.add('hidden');
+    editModePlate = null;
+    inputPlate.value = '';
+    inputName.value = '';
+    crudMsg.className = 'toast-notification';
+}
+
+btnCloseModal.addEventListener('click', closeModal);
+btnCancel.addEventListener('click', closeModal);
+
+// Close modal when clicking overlay
+vehicleModal.addEventListener('click', (e) => {
+    if (e.target === vehicleModal) {
+        closeModal();
+    }
+});
+
+// Close modal with Escape key
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+        if (!vehicleModal.classList.contains('hidden')) {
+            closeModal();
+        }
+        if (!deleteModal.classList.contains('hidden')) {
+            closeDeleteModal();
+        }
+    }
+});
+
+/* ─── Delete Modal Handlers ──────────────────────────────────────────────── */
+function closeDeleteModal() {
+    deleteModal.classList.add('hidden');
+    deleteTargetPlate = null;
+}
+
+btnCloseDeleteModal.addEventListener('click', closeDeleteModal);
+btnCancelDelete.addEventListener('click', closeDeleteModal);
+
+// Close delete modal when clicking overlay
+deleteModal.addEventListener('click', (e) => {
+    if (e.target === deleteModal) {
+        closeDeleteModal();
+    }
+});
+
+// Confirm delete
+btnConfirmDelete.addEventListener('click', async () => {
+    if (!deleteTargetPlate) return;
+    
+    try {
+        const res = await fetch(`/api/vehicles/${deleteTargetPlate}`, { method: 'DELETE' });
+        const result = await res.json();
+        if(result.success) {
+            showMsg('Kendaraan dihapus!', 'toast-success');
+            closeDeleteModal();
+            loadVehicles(vehicleSearchQuery);
+        } else {
+            showMsg('Gagal menghapus: ' + result.error, 'toast-error');
+        }
+    } catch (err) {
+        showMsg('Terjadi kesalahan jaringan', 'toast-error');
+    }
+});
+
+/* ─── Vehicle Search Dropdown ────────────────────────────────────────────── */
+document.getElementById('btn-vehicle-search-toggle').addEventListener('click', (e) => {
+    e.stopPropagation();
+    const searchDropdown = document.getElementById('vehicle-search-dropdown');
+    searchDropdown.classList.toggle('hidden');
+    
+    if (!searchDropdown.classList.contains('hidden')) {
+        searchVehicleInput.focus();
+    }
+});
+
+// Close vehicle search dropdown when clicking outside
+document.addEventListener('click', (e) => {
+    const searchDropdown = document.getElementById('vehicle-search-dropdown');
+    const btnSearch = document.getElementById('btn-vehicle-search-toggle');
+    
+    if (searchDropdown && !searchDropdown.contains(e.target) && !btnSearch.contains(e.target)) {
+        searchDropdown.classList.add('hidden');
+    }
+});
 
 /* ─── Fetch & Render Vehicles ────────────────────────────────────────────── */
 async function loadVehicles(search = '') {
@@ -151,11 +417,23 @@ let currentLogsJSON = "";
 let currentPage = 1;
 const perPage = 20;
 
-async function loadLogs(page = currentPage, search = '') {
+async function loadLogs(page = currentPage, search = '', filters = {}) {
     try {
         let url = `/api/logs?page=${page}&per_page=${perPage}`;
         if (search) {
             url += `&search=${encodeURIComponent(search)}`;
+        }
+        
+        // Tambahkan filter parameters
+        if (filterMode === 'range') {
+            if (filters.dateFrom) url += `&date_from=${filters.dateFrom}`;
+            if (filters.dateTo) url += `&date_to=${filters.dateTo}`;
+            if (filters.timeFrom) url += `&time_from=${filters.timeFrom}`;
+            if (filters.timeTo) url += `&time_to=${filters.timeTo}`;
+        } else if (filterMode === 'specific') {
+            if (filters.specificDate) url += `&specific_date=${filters.specificDate}`;
+            if (filters.specificTimeFrom) url += `&time_from=${filters.specificTimeFrom}`;
+            if (filters.specificTimeTo) url += `&time_to=${filters.specificTimeTo}`;
         }
         
         const res = await fetch(url);
@@ -172,16 +450,25 @@ async function loadLogs(page = currentPage, search = '') {
         // Update current page
         currentPage = pagination.page;
         
-        // Render logs
+        // Render logs with status filter
         logsContainer.innerHTML = '';
-        if(logs.length === 0) {
-            const msg = search ? `Tidak ada hasil untuk "${search}"` : 'Belum ada histori logs';
+        
+        // Filter logs by status
+        let filteredLogs = logs;
+        if (statusFilter === 'registered') {
+            filteredLogs = logs.filter(log => log.registered);
+        } else if (statusFilter === 'unregistered') {
+            filteredLogs = logs.filter(log => !log.registered);
+        }
+        
+        if(filteredLogs.length === 0) {
+            const msg = search || hasActiveFilters() || statusFilter !== 'all' ? `Tidak ada hasil` : 'Belum ada histori logs';
             logsContainer.innerHTML = `<div class="empty-state">${msg}</div>`;
             document.getElementById('pagination-controls').classList.add('hidden');
             return;
         }
 
-        logs.forEach(log => {
+        filteredLogs.forEach(log => {
             const div = document.createElement('div');
             const isReg = log.registered;
             const borderColor = isReg ? '#4caf50' : '#ff9800';
@@ -254,23 +541,199 @@ function updatePaginationControls(pagination) {
 // Pagination button handlers
 document.getElementById('btn-prev').addEventListener('click', () => {
     if (currentPage > 1) {
-        loadLogs(currentPage - 1, logsSearchQuery);
+        loadLogs(currentPage - 1, logsSearchQuery, activeFilters);
     }
 });
 
 document.getElementById('btn-next').addEventListener('click', () => {
-    loadLogs(currentPage + 1, logsSearchQuery);
+    loadLogs(currentPage + 1, logsSearchQuery, activeFilters);
 });
 
 // Manual refresh button handler
 document.getElementById('btn-refresh-logs').addEventListener('click', function() {
     this.classList.add('spinning');
-    loadLogs(currentPage, logsSearchQuery).finally(() => {
+    loadLogs(currentPage, logsSearchQuery, activeFilters).finally(() => {
         setTimeout(() => {
             this.classList.remove('spinning');
         }, 600);
     });
 });
+
+/* ─── Dropdown Toggle Handlers ──────────────────────────────────────────── */
+// Toggle search dropdown
+document.getElementById('btn-search-toggle').addEventListener('click', (e) => {
+    e.stopPropagation();
+    const searchDropdown = document.getElementById('search-dropdown');
+    const filterDropdown = document.getElementById('filter-dropdown');
+    
+    // Close filter dropdown if open
+    filterDropdown.classList.add('hidden');
+    
+    // Toggle search dropdown
+    searchDropdown.classList.toggle('hidden');
+    
+    // Focus on search input when opened
+    if (!searchDropdown.classList.contains('hidden')) {
+        document.getElementById('search-logs').focus();
+    }
+});
+
+// Toggle filter dropdown
+document.getElementById('btn-filter-toggle').addEventListener('click', (e) => {
+    e.stopPropagation();
+    const searchDropdown = document.getElementById('search-dropdown');
+    const filterDropdown = document.getElementById('filter-dropdown');
+    
+    // Close search dropdown if open
+    searchDropdown.classList.add('hidden');
+    
+    // Toggle filter dropdown
+    filterDropdown.classList.toggle('hidden');
+});
+
+// Close dropdowns when clicking outside
+document.addEventListener('click', (e) => {
+    const searchDropdown = document.getElementById('search-dropdown');
+    const filterDropdown = document.getElementById('filter-dropdown');
+    const btnSearch = document.getElementById('btn-search-toggle');
+    const btnFilter = document.getElementById('btn-filter-toggle');
+    
+    if (!searchDropdown.contains(e.target) && !btnSearch.contains(e.target)) {
+        searchDropdown.classList.add('hidden');
+    }
+    
+    if (!filterDropdown.contains(e.target) && !btnFilter.contains(e.target)) {
+        filterDropdown.classList.add('hidden');
+    }
+});
+
+/* ─── Filter Handlers ────────────────────────────────────────────────────── */
+// Status filter tabs
+document.querySelectorAll('.status-tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+        // Update active tab
+        document.querySelectorAll('.status-tab').forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
+        
+        // Update status filter
+        statusFilter = tab.dataset.status;
+    });
+});
+
+// Filter mode tabs
+document.querySelectorAll('.filter-tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+        // Update active tab
+        document.querySelectorAll('.filter-tab').forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
+        
+        // Switch filter mode
+        filterMode = tab.dataset.mode;
+        document.getElementById('filter-range').classList.toggle('hidden', filterMode !== 'range');
+        document.getElementById('filter-specific').classList.toggle('hidden', filterMode !== 'specific');
+    });
+});
+
+// Apply filter
+document.getElementById('btn-apply-filter').addEventListener('click', () => {
+    if (filterMode === 'range') {
+        activeFilters.dateFrom = document.getElementById('date-from').value;
+        activeFilters.dateTo = document.getElementById('date-to').value;
+        activeFilters.timeFrom = document.getElementById('time-from').value;
+        activeFilters.timeTo = document.getElementById('time-to').value;
+        activeFilters.specificDate = '';
+        activeFilters.specificTimeFrom = '';
+        activeFilters.specificTimeTo = '';
+    } else {
+        activeFilters.specificDate = document.getElementById('specific-date').value;
+        activeFilters.specificTimeFrom = document.getElementById('specific-time-from').value;
+        activeFilters.specificTimeTo = document.getElementById('specific-time-to').value;
+        activeFilters.dateFrom = '';
+        activeFilters.dateTo = '';
+        activeFilters.timeFrom = '';
+        activeFilters.timeTo = '';
+    }
+    
+    currentPage = 1;
+    loadLogs(1, logsSearchQuery, activeFilters);
+    updateActiveFiltersDisplay();
+});
+
+// Clear filter
+document.getElementById('btn-clear-filter').addEventListener('click', () => {
+    // Clear all filter inputs
+    document.getElementById('date-from').value = '';
+    document.getElementById('date-to').value = '';
+    document.getElementById('time-from').value = '';
+    document.getElementById('time-to').value = '';
+    document.getElementById('specific-date').value = '';
+    document.getElementById('specific-time-from').value = '';
+    document.getElementById('specific-time-to').value = '';
+    
+    // Clear active filters
+    activeFilters = {
+        dateFrom: '',
+        dateTo: '',
+        timeFrom: '',
+        timeTo: '',
+        specificDate: '',
+        specificTimeFrom: '',
+        specificTimeTo: ''
+    };
+    
+    currentPage = 1;
+    loadLogs(1, logsSearchQuery, activeFilters);
+    updateActiveFiltersDisplay();
+});
+
+// Helper: Check if any filter is active
+function hasActiveFilters() {
+    return Object.values(activeFilters).some(v => v !== '');
+}
+
+// Helper: Update active filters display
+function updateActiveFiltersDisplay() {
+    const container = document.getElementById('active-filters');
+    const tagsContainer = document.getElementById('active-filters-tags');
+    
+    if (!hasActiveFilters()) {
+        container.classList.add('hidden');
+        return;
+    }
+    
+    container.classList.remove('hidden');
+    tagsContainer.innerHTML = '';
+    
+    const formatDate = (date) => {
+        const d = new Date(date);
+        return d.toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' });
+    };
+    
+    if (filterMode === 'range') {
+        if (activeFilters.dateFrom) {
+            tagsContainer.innerHTML += `<span class="filter-tag">Dari: ${formatDate(activeFilters.dateFrom)}</span>`;
+        }
+        if (activeFilters.dateTo) {
+            tagsContainer.innerHTML += `<span class="filter-tag">Sampai: ${formatDate(activeFilters.dateTo)}</span>`;
+        }
+        if (activeFilters.timeFrom) {
+            tagsContainer.innerHTML += `<span class="filter-tag">Jam: ${activeFilters.timeFrom}</span>`;
+        }
+        if (activeFilters.timeTo) {
+            tagsContainer.innerHTML += `<span class="filter-tag">Sampai: ${activeFilters.timeTo}</span>`;
+        }
+    } else {
+        if (activeFilters.specificDate) {
+            tagsContainer.innerHTML += `<span class="filter-tag">Tanggal: ${formatDate(activeFilters.specificDate)}</span>`;
+        }
+        if (activeFilters.specificTimeFrom) {
+            tagsContainer.innerHTML += `<span class="filter-tag">Jam: ${activeFilters.specificTimeFrom}</span>`;
+        }
+        if (activeFilters.specificTimeTo) {
+            tagsContainer.innerHTML += `<span class="filter-tag">Sampai: ${activeFilters.specificTimeTo}</span>`;
+        }
+    }
+}
 
 /* ─── Search Handlers ────────────────────────────────────────────────────── */
 // Vehicle search with debounce
@@ -318,7 +781,7 @@ searchLogsInput.addEventListener('input', (e) => {
     clearTimeout(logsSearchTimeout);
     logsSearchTimeout = setTimeout(() => {
         currentPage = 1;
-        loadLogs(1, query);
+        loadLogs(1, query, activeFilters);
     }, 300);
 });
 
@@ -328,7 +791,7 @@ btnClearLogsSearch.addEventListener('click', () => {
     logsSearchQuery = '';
     btnClearLogsSearch.classList.add('hidden');
     currentPage = 1;
-    loadLogs(1);
+    loadLogs(1, '', activeFilters);
 });
 
 /* ─── Add Vehicle ────────────────────────────────────────────────────────── */
@@ -351,7 +814,7 @@ btnAdd.addEventListener('click', async () => {
             result = await res.json();
             if(result.success) {
                 showMsg('Data berhasil diubah!', 'toast-success');
-                btnCancel.click(); // Reset state
+                setTimeout(() => closeModal(), 1500);
                 loadVehicles(vehicleSearchQuery);
             } else {
                 showMsg('Gagal: ' + result.error, 'toast-error');
@@ -365,8 +828,7 @@ btnAdd.addEventListener('click', async () => {
             result = await res.json();
             if(result.success) {
                 showMsg('Kendaraan berhasil ditambahkan!', 'toast-success');
-                inputPlate.value = '';
-                inputName.value = '';
+                setTimeout(() => closeModal(), 1500);
                 loadVehicles(vehicleSearchQuery);
             } else {
                 showMsg('Gagal: ' + result.error, 'toast-error');
@@ -382,34 +844,24 @@ window.editVehicle = function(plate, name) {
     editModePlate = plate;
     inputPlate.value = plate;
     inputName.value = name;
-    btnAdd.textContent = 'Simpan Perubahan';
-    btnCancel.style.display = 'inline-block';
-    inputPlate.focus();
+    modalTitle.textContent = 'Edit Kendaraan';
+    btnAdd.textContent = 'Konfirmasi';
+    vehicleModal.classList.remove('hidden');
+    setTimeout(() => inputPlate.focus(), 100);
 }
 
 /* ─── Delete Vehicle ─────────────────────────────────────────────────────── */
-window.deleteVehicle = async function(plate) {
-    if(!confirm(`Yakin ingin menghapus kendaraan ${plate}?`)) return;
-    
-    try {
-        const res = await fetch(`/api/vehicles/${plate}`, { method: 'DELETE' });
-        const result = await res.json();
-        if(result.success) {
-            showMsg('Kendaraan dihapus!', 'toast-success');
-            loadVehicles(vehicleSearchQuery);
-        } else {
-            showMsg('Gagal menghapus: ' + result.error, 'toast-error');
-        }
-    } catch (err) {
-        showMsg('Terjadi kesalahan jaringan', 'toast-error');
-    }
+window.deleteVehicle = function(plate) {
+    deleteTargetPlate = plate;
+    deletePlate.textContent = plate;
+    deleteModal.classList.remove('hidden');
 }
 
 /* ─── Helpers ────────────────────────────────────────────────────────────── */
 function showMsg(text, typeClass) {
     crudMsg.textContent = text;
-    crudMsg.className = `toast show ${typeClass}`;
-    setTimeout(() => { crudMsg.className = 'toast'; }, 3000);
+    crudMsg.className = `toast-notification show ${typeClass}`;
+    setTimeout(() => { crudMsg.className = 'toast-notification'; }, 3000);
 }
 
 /* ─── Init & Polling ─────────────────────────────────────────────────────── */
@@ -429,7 +881,7 @@ function startLogsPolling() {
     logsPollingInterval = setInterval(() => {
         // Only poll if page is visible
         if (!document.hidden) {
-            loadLogs(currentPage, logsSearchQuery);
+            loadLogs(currentPage, logsSearchQuery, activeFilters);
         }
     }, 10000);
 }
@@ -449,7 +901,7 @@ document.addEventListener('visibilitychange', () => {
     if (document.hidden) {
         stopLogsPolling();
     } else {
-        loadLogs(currentPage, logsSearchQuery); // Refresh immediately when page becomes visible
+        loadLogs(currentPage, logsSearchQuery, activeFilters); // Refresh immediately when page becomes visible
         startLogsPolling();
     }
 });
