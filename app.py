@@ -5,6 +5,8 @@ import time
 import os
 import glob
 import logging
+from functools import wraps
+from datetime import datetime, timedelta
 
 from plate_detector import analyze_frame
 
@@ -12,22 +14,133 @@ from plate_detector import analyze_frame
 logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
 
 app = Flask(__name__)
-app.secret_key = "scanvec-unklabpass-2026"
+app.secret_key = os.getenv("SECRET_KEY", "scanvec-unklabpass-2026")
+
+# ═══ Konfigurasi Environment-based ═════════════════════════════════════════
+FLASK_ENV = os.getenv("FLASK_ENV", "development")
+IS_PRODUCTION = FLASK_ENV == "production"
+
+# ═══ Security Configuration ════════════════════════════════════════════════
+# Session timeout (30 menit inactivity)
+app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(minutes=30)
+
+# ═══ Rate Limiting (Simple in-memory) ══════════════════════════════════════
+from collections import defaultdict
+from threading import Lock
+
+rate_limit_storage = defaultdict(list)
+rate_limit_lock = Lock()
+
+def rate_limit(max_requests=10, window_seconds=60):
+    """
+    Simple rate limiting decorator
+    max_requests: jumlah request maksimal
+    window_seconds: dalam berapa detik
+    """
+    def decorator(f):
+        @wraps(f)
+        def wrapped(*args, **kwargs):
+            if not IS_PRODUCTION:
+                return f(*args, **kwargs)
+                
+            # Get client IP
+            client_ip = request.headers.get('X-Forwarded-For', request.remote_addr)
+            if ',' in client_ip:
+                client_ip = client_ip.split(',')[0].strip()
+            
+            now = time.time()
+            key = f"{f.__name__}:{client_ip}"
+            
+            with rate_limit_lock:
+                # Clean old requests
+                rate_limit_storage[key] = [
+                    req_time for req_time in rate_limit_storage[key]
+                    if now - req_time < window_seconds
+                ]
+                
+                # Check limit
+                if len(rate_limit_storage[key]) >= max_requests:
+                    logging.warning(f"[RATE LIMIT] {client_ip} exceeded limit for {f.__name__}")
+                    return jsonify({
+                        "success": False,
+                        "error": "Too many requests. Please try again later."
+                    }), 429
+                
+                # Add current request
+                rate_limit_storage[key].append(now)
+            
+            return f(*args, **kwargs)
+        return wrapped
+    return decorator
+
+# ═══ Authentication Decorators ═════════════════════════════════════════════
+def login_required(f):
+    """Decorator untuk endpoint yang require login"""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if not session.get("logged_in"):
+            if request.is_json:
+                return jsonify({"success": False, "error": "Unauthorized"}), 401
+            return redirect(url_for("login"))
+        
+        # Update last activity
+        session["last_activity"] = datetime.now().isoformat()
+        return f(*args, **kwargs)
+    return decorated_function
+
+def check_session_timeout():
+    """Check apakah session sudah timeout"""
+    if session.get("logged_in"):
+        last_activity = session.get("last_activity")
+        if last_activity:
+            last_time = datetime.fromisoformat(last_activity)
+            if datetime.now() - last_time > timedelta(minutes=30):
+                session.clear()
+                return True
+    return False
+
+app = Flask(__name__)
+app.secret_key = os.getenv("SECRET_KEY", "scanvec-unklabpass-2026")
+
+# ═══ Konfigurasi Environment-based ═════════════════════════════════════════
+FLASK_ENV = os.getenv("FLASK_ENV", "development")
+IS_PRODUCTION = FLASK_ENV == "production"
 
 # ═══ Konfigurasi Auto-reload & Cache ═══════════════════════════════════════
-app.config["TEMPLATES_AUTO_RELOAD"]    = True
-app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
+app.config["TEMPLATES_AUTO_RELOAD"] = not IS_PRODUCTION
+app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0 if not IS_PRODUCTION else 31536000
+
+@app.before_request
+def before_request():
+    """Check session timeout sebelum setiap request"""
+    if check_session_timeout():
+        if request.is_json:
+            return jsonify({"success": False, "error": "Session expired"}), 401
+        return redirect(url_for("login"))
 
 @app.after_request
 def no_cache(response):
     """Disable cache untuk development - selalu load file terbaru"""
-    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
-    response.headers["Pragma"]        = "no-cache"
-    response.headers["Expires"]       = "0"
+    if not IS_PRODUCTION:
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    
+    # Security headers (always apply)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    
+    if IS_PRODUCTION:
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    
     return response
 
 # Path ke database SQLite
-DB_PATH = os.path.join(os.path.dirname(__file__), "data", "vehicles.db")
+DB_PATH = os.getenv("DB_PATH", os.path.join(os.path.dirname(__file__), "data", "vehicles.db"))
+
+# Ensure data directory exists
+os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
 
 def init_db():
     """
@@ -160,11 +273,19 @@ def about():
     return render_template("about.html", page="about")
 
 @app.route("/login", methods=["GET", "POST"])
+@rate_limit(max_requests=5, window_seconds=60)  # Max 5 login attempts per minute
 def login():
     """Halaman login untuk akses dashboard admin"""
     if request.method == "POST":
         username = request.form.get("username", "").strip()
         password = request.form.get("password", "").strip()
+        
+        # Input validation
+        if not username or not password:
+            return render_template("login.html", error="Username dan Password wajib diisi!")
+        
+        if len(username) > 50 or len(password) > 100:
+            return render_template("login.html", error="Input terlalu panjang!")
         
         # Cari user di database
         conn = sqlite3.connect(DB_PATH)
@@ -174,10 +295,14 @@ def login():
         
         # Verifikasi password
         if user and check_password_hash(user["password_hash"], password):
+            session.permanent = True
             session["logged_in"] = True
             session["username"] = username
+            session["last_activity"] = datetime.now().isoformat()
+            logging.info(f"[AUTH] User {username} logged in from {request.remote_addr}")
             return redirect(url_for("dashboard"))
         else:
+            logging.warning(f"[AUTH] Failed login attempt for {username} from {request.remote_addr}")
             return render_template("login.html", error="Username atau Password salah!")
             
     return render_template("login.html")
@@ -185,6 +310,8 @@ def login():
 @app.route("/logout")
 def logout():
     """Logout - hapus session dan redirect ke home"""
+    username = session.get("username", "unknown")
+    logging.info(f"[AUTH] User {username} logged out")
     session.clear()
     return redirect(url_for("home"))
 
@@ -296,13 +423,14 @@ def clear():
 # ═══════════════════════════════════════════════════════════════════════════
 
 @app.route("/dashboard")
+@login_required
 def dashboard():
     """Halaman dashboard admin - hanya bisa diakses setelah login"""
-    if not session.get("logged_in"):
-        return redirect(url_for("login"))
     return render_template("dashboard.html", page="dashboard")
 
 @app.route("/api/vehicles", methods=["GET"])
+@login_required
+@rate_limit(max_requests=30, window_seconds=60)
 def api_get_vehicles():
     """
     GET /api/vehicles - Ambil semua data kendaraan
@@ -331,21 +459,33 @@ def api_get_vehicles():
         return jsonify(load_vehicles())
 
 @app.route("/api/vehicles", methods=["POST"])
+@login_required
+@rate_limit(max_requests=10, window_seconds=60)
 def api_add_vehicle():
     """
     POST /api/vehicles - Tambah kendaraan baru
     Body: {"plate": "DB123", "name": "John Doe"}
     """
-    if not session.get("logged_in"):
-        return jsonify({"success": False, "error": "Unauthorized"}), 401
-    
     global CACHE_VEHICLES
     data = request.json
+    
+    if not data:
+        return jsonify({"success": False, "error": "No data provided"}), 400
+    
     plate = data.get("plate", "").replace(" ", "").upper()
     name = data.get("name", "").strip()
     
+    # Input validation
     if not plate or not name:
         return jsonify({"success": False, "error": "Plate and Name required"}), 400
+    
+    if len(plate) > 15 or len(name) > 100:
+        return jsonify({"success": False, "error": "Input too long"}), 400
+    
+    # Validate plate format (DB + numbers + optional letters)
+    import re
+    if not re.match(r'^DB\d{1,4}[A-Z]{0,3}$', plate):
+        return jsonify({"success": False, "error": "Invalid plate format. Use: DB1234ABC"}), 400
         
     try:
         conn = sqlite3.connect(DB_PATH)
@@ -353,29 +493,43 @@ def api_add_vehicle():
         conn.commit()
         conn.close()
         CACHE_VEHICLES = []  # Invalidate cache
+        logging.info(f"[DB] Vehicle added: {plate} by {session.get('username')}")
         return jsonify({"success": True})
     except sqlite3.IntegrityError:
         return jsonify({"success": False, "error": "Plate already registered"}), 400
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        logging.error(f"[DB] Error adding vehicle: {e}")
+        return jsonify({"success": False, "error": "Database error"}), 500
 
 @app.route("/api/vehicles", methods=["PUT"])
+@login_required
+@rate_limit(max_requests=10, window_seconds=60)
 def api_update_vehicle():
     """
     PUT /api/vehicles - Update data kendaraan
     Body: {"old_plate": "DB123", "new_plate": "DB123A", "name": "John Doe"}
     """
-    if not session.get("logged_in"):
-        return jsonify({"success": False, "error": "Unauthorized"}), 401
-    
     global CACHE_VEHICLES
     data = request.json
+    
+    if not data:
+        return jsonify({"success": False, "error": "No data provided"}), 400
+    
     old_plate = data.get("old_plate", "").replace(" ", "").upper()
     new_plate = data.get("new_plate", "").replace(" ", "").upper()
     name = data.get("name", "").strip()
     
+    # Input validation
     if not old_plate or not new_plate or not name:
         return jsonify({"success": False, "error": "Incomplete data"}), 400
+    
+    if len(new_plate) > 15 or len(name) > 100:
+        return jsonify({"success": False, "error": "Input too long"}), 400
+    
+    # Validate plate format
+    import re
+    if not re.match(r'^DB\d{1,4}[A-Z]{0,3}$', new_plate):
+        return jsonify({"success": False, "error": "Invalid plate format"}), 400
         
     try:
         conn = sqlite3.connect(DB_PATH)
@@ -383,34 +537,49 @@ def api_update_vehicle():
         conn.commit()
         conn.close()
         CACHE_VEHICLES = []  # Invalidate cache
+        logging.info(f"[DB] Vehicle updated: {old_plate} -> {new_plate} by {session.get('username')}")
         return jsonify({"success": True})
     except sqlite3.IntegrityError:
         return jsonify({"success": False, "error": "New plate already exists"}), 400
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        logging.error(f"[DB] Error updating vehicle: {e}")
+        return jsonify({"success": False, "error": "Database error"}), 500
 
 @app.route("/api/vehicles/<plate>", methods=["DELETE"])
+@login_required
+@rate_limit(max_requests=10, window_seconds=60)
 def api_delete_vehicle(plate):
     """
     DELETE /api/vehicles/:plate - Hapus kendaraan
     """
-    if not session.get("logged_in"):
-        return jsonify({"success": False, "error": "Unauthorized"}), 401
-    
     global CACHE_VEHICLES
     plate = plate.replace(" ", "").upper()
     
+    # Validate plate format
+    import re
+    if not re.match(r'^DB\d{1,4}[A-Z]{0,3}$', plate):
+        return jsonify({"success": False, "error": "Invalid plate format"}), 400
+    
     try:
         conn = sqlite3.connect(DB_PATH)
-        conn.execute("DELETE FROM vehicles WHERE plat_nomor = ?", (plate,))
+        cursor = conn.execute("DELETE FROM vehicles WHERE plat_nomor = ?", (plate,))
         conn.commit()
+        
+        if cursor.rowcount == 0:
+            conn.close()
+            return jsonify({"success": False, "error": "Vehicle not found"}), 404
+        
         conn.close()
         CACHE_VEHICLES = []  # Invalidate cache
+        logging.info(f"[DB] Vehicle deleted: {plate} by {session.get('username')}")
         return jsonify({"success": True})
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        logging.error(f"[DB] Error deleting vehicle: {e}")
+        return jsonify({"success": False, "error": "Database error"}), 500
 
 @app.route("/api/logs", methods=["GET"])
+@login_required
+@rate_limit(max_requests=30, window_seconds=60)
 def api_get_logs():
     """
     GET /api/logs - Ambil histori gate logs dengan pagination dan filtering
@@ -537,14 +706,18 @@ def api_get_logs():
 if __name__ == "__main__":
     # Collect semua templates & static files agar Flask reloader watch perubahan
     BASE = os.path.dirname(__file__)
-    extra_files = (
-        glob.glob(os.path.join(BASE, "templates", "**", "*"), recursive=True) +
-        glob.glob(os.path.join(BASE, "static",    "**", "*"), recursive=True)
-    )
+    extra_files = []
+    
+    if not IS_PRODUCTION:
+        extra_files = (
+            glob.glob(os.path.join(BASE, "templates", "**", "*"), recursive=True) +
+            glob.glob(os.path.join(BASE, "static",    "**", "*"), recursive=True)
+        )
+    
     app.run(
-        debug=True,
-        port=5000,
-        host="0.0.0.0",
-        use_reloader=True,
-        extra_files=extra_files,
+        debug=not IS_PRODUCTION,
+        port=int(os.getenv("PORT", 5000)),
+        host=os.getenv("HOST", "0.0.0.0"),
+        use_reloader=not IS_PRODUCTION,
+        extra_files=extra_files if not IS_PRODUCTION else None,
     )
