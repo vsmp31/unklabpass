@@ -8,7 +8,7 @@ import logging
 from functools import wraps
 from datetime import datetime, timedelta
 
-from plate_detector import analyze_frame
+from plate_detector import analyze_frame_from_img, select_sharpest_frames, decode_b64, analyze_crop
 
 # Setup logging untuk monitoring sistem
 logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
@@ -341,12 +341,14 @@ def analyze():
         vehicles  = load_vehicles()
         scan_time = time.strftime("%Y-%m-%d %H:%M:%S")
 
+        # Decode semua frame, pilih 2 terbaik
+        all_imgs = [decode_b64(b64) for b64 in images if b64]
+        sharp_imgs = select_sharpest_frames(all_imgs, top_n=2)
+
         # Analyze setiap frame dalam vector, ambil hasil terbaik
         final_result = None
-        for b64_img in images:
-            if not b64_img:
-                continue
-            res = analyze_frame(b64_img, vehicles)
+        for img in sharp_imgs:
+            res = analyze_frame_from_img(img, vehicles)
             if res.get("found") and res.get("plate"):
                 final_result = res
                 break
@@ -410,6 +412,65 @@ def analyze():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
+@app.route("/ocr_only", methods=["POST"])
+def ocr_only():
+    """
+    API khusus untuk OCR. Menerima gambar plat hasil cropping dari Client-Side YOLO.
+    Mengembalikan data plat dan lecturer jika cocok.
+    """
+    try:
+        data = request.get_json(force=True)
+        b64_image = data.get("image", "")
+        if not b64_image:
+            return jsonify({"success": False, "error": "No image data received"}), 400
+
+        vehicles = load_vehicles()
+        scan_time = time.strftime("%Y-%m-%d %H:%M:%S")
+        
+        result = analyze_crop(b64_image, vehicles)
+        
+        # Log to DB if registered (or explicitly requested)
+        if result["found"] and result["plate"] and data.get("save_log", False):
+            plate_to_log = result["plate"]
+            conn = sqlite3.connect(DB_PATH)
+            cur = conn.cursor()
+            
+            # Cooldown check
+            cur.execute("SELECT plat_nomor FROM gate_logs ORDER BY entry_time DESC LIMIT 1")
+            last_logged = cur.fetchone()
+            
+            if not last_logged or last_logged[0] != plate_to_log:
+                cur.execute(
+                    "INSERT INTO gate_logs (plat_nomor, entry_time) VALUES (?, ?)",
+                    (plate_to_log, scan_time)
+                )
+                conn.commit()
+            conn.close()
+
+        base = {
+            "success":    True,
+            "found":      result["found"],
+            "registered": result["registered"],
+            "plate":      result["plate"],
+            "raw_text":   result.get("raw_text", ""),
+            "scan_time":  scan_time,
+        }
+        
+        if result["registered"] and result["lecturer"]:
+            vehicle = result["lecturer"]
+            session["detected"]  = vehicle
+            session["scan_time"] = scan_time
+            base.update({
+                "name": vehicle.get("name", "—"),
+            })
+
+        return jsonify(base)
+        
+    except Exception as e:
+        logging.exception("Error in /ocr_only")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 
 @app.route("/clear", methods=["POST"])
 def clear():
@@ -417,6 +478,42 @@ def clear():
     session.clear()
     return jsonify({"success": True})
 
+
+@app.route("/api/log_gate", methods=["POST"])
+@rate_limit(max_requests=60, window_seconds=60)
+def api_log_gate():
+    """
+    Simpan plat nomor yang sudah dikonfirmasi secara final (Majority Voting) ke database
+    """
+    try:
+        data = request.get_json(force=True)
+        plate_to_log = data.get("plate", "").upper().strip()
+        status = data.get("status", "Unregistered")
+        
+        if not plate_to_log:
+            return jsonify({"success": False, "error": "No plate provided"}), 400
+            
+        scan_time = time.strftime("%Y-%m-%d %H:%M:%S")
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        
+        # Cooldown check
+        cur.execute("SELECT plat_nomor FROM gate_logs ORDER BY entry_time DESC LIMIT 1")
+        last_logged = cur.fetchone()
+        
+        if not last_logged or last_logged[0] != plate_to_log:
+            cur.execute(
+                "INSERT INTO gate_logs (plat_nomor, entry_time) VALUES (?, ?)",
+                (plate_to_log, scan_time)
+            )
+            conn.commit()
+            
+        conn.close()
+        return jsonify({"success": True, "logged": True})
+        
+    except Exception as e:
+        logging.exception("Error in /api/log_gate")
+        return jsonify({"success": False, "error": str(e)}), 500
 
 # ═══════════════════════════════════════════════════════════════════════════
 # DASHBOARD & CRUD ENDPOINTS

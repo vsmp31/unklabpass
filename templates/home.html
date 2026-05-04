@@ -79,6 +79,7 @@
 
 </div>
 
+<script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"></script>
 <script>
     /* ═══ refs ═══════════════════════════════════════════════════════════════════ */
     const video = document.getElementById('camera-feed');
@@ -89,11 +90,19 @@
     const termContent = document.getElementById('terminal-content');
     const termStatus = document.getElementById('term-status');
     const bCtx = boxCanvas.getContext('2d');
+    const sCtx = snapCanvas.getContext('2d', { willReadFrequently: true });
 
     let cameraStream = null;
     let isRunning = false;
-    let isAnalyzing = false;
+    let isAnalyzingOCR = false;
     let lastPlate = "";
+    let isCurrentBoxRegistered = false; // Flag to color box accurately
+    let framesWithoutPlate = 0;
+    let lastLogTime = 0;
+    let ocrHistory = []; // Array to store recent OCR reads for Majority Voting
+    let boxVector = []; // Array to validate YOLO box stability
+    let yoloSession = null;
+    let registeredPlates = new Set(); // To color boxes instantly
 
     /* ═══ 20-color YOLO palette ══════════════════════════════════════════════════ */
     const PALETTE = [
@@ -113,36 +122,38 @@
         }
     }
 
-    /* Maps raw-frame coords to display coords under object-fit:cover */
+    /* Maps raw-frame coords to display coords under object-fit:contain */
     function toDisp(fx, fy, fw, fh, FW, FH) {
         const dw = boxCanvas.width, dh = boxCanvas.height;
-        const sc = Math.max(dw / FW, dh / FH);
+        const sc = Math.min(dw / FW, dh / FH);
         const ox = (dw - FW * sc) / 2, oy = (dh - FH * sc) / 2;
         return { x: fx * sc + ox, y: fy * sc + oy, w: fw * sc, h: fh * sc };
     }
 
-
-
-    /* ═══ Camera ════════════════════════════════════════════════════════════════ */
-    let scanInterval = null;
-
-    // Tidak auto-start, tunggu user klik tombol
-    window.addEventListener('DOMContentLoaded', () => {
-        // Load database info on startup
+    /* ═══ Startup ════════════════════════════════════════════════════════════════ */
+    window.addEventListener('DOMContentLoaded', async () => {
         loadDatabaseInfo();
+        
+        try {
+            addLog('Downloading ONNX YOLO model...', 'info');
+            // Init ONNX Runtime
+            ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/';
+            yoloSession = await ort.InferenceSession.create('/static/model/best.onnx', { executionProviders: ['wasm'] });
+            addLog('ONNX WebGL/WASM Engine Ready.', 'info');
+        } catch (e) {
+            addLog('Failed to load ONNX: ' + e.message, 'error');
+        }
         
         const startBtn = document.getElementById('start-camera-btn');
         startBtn.addEventListener('click', async () => {
             startBtn.disabled = true;
             startBtn.textContent = 'Starting...';
-            
             await startCamera();
             
             if (isRunning) {
-                addLog('Camera active. YOLOv8 object detection ready.', 'info');
-                addLog('Kamera aktif (Anti-Blur via Vector).', 'info');
-                setStatus('● SCANNING', 'active');
-                scanInterval = setInterval(performScan, 2500);
+                addLog('Camera active. Client-Side YOLO tracking ready.', 'info');
+                setStatus('● REAL-TIME TRACKING', 'active');
+                requestAnimationFrame(scanLoop);
             }
         });
     });
@@ -153,6 +164,8 @@
             const vehicles = await resp.json();
             const dbInfo = document.getElementById('db-info');
             dbInfo.textContent = `vehicles.db (${vehicles.length} vehicles)`;
+            // Preload plate strings for instant coloring
+            registeredPlates = new Set(vehicles.map(v => v.plate));
         } catch (err) {
             console.error('Failed to load database info:', err);
         }
@@ -177,84 +190,268 @@
         }
     }
 
-    /* ═══ Scan loop ═════════════════════════════════════════════════════════════ */
-    async function performScan() {
-        if (!isRunning || isAnalyzing) return;
-        isAnalyzing = true;
-        setStatus('● CAPTURING', 'processing');
+    /* ═══ YOLO ONNX Logic ═══════════════════════════════════════════════════════ */
+    // Helper: NMS implementation
+    function nms(boxes, iouThreshold) {
+        if (boxes.length === 0) return [];
+        boxes.sort((a, b) => b.conf - a.conf);
+        const kept = [];
+        for (const box of boxes) {
+            let keep = true;
+            for (const k of kept) {
+                const xi1 = Math.max(box.x1, k.x1);
+                const yi1 = Math.max(box.y1, k.y1);
+                const xi2 = Math.min(box.x2, k.x2);
+                const yi2 = Math.min(box.y2, k.y2);
+                const interArea = Math.max(0, xi2 - xi1) * Math.max(0, yi2 - yi1);
+                const boxArea = box.w * box.h;
+                const kArea = k.w * k.h;
+                const unionArea = boxArea + kArea - interArea;
+                const iou = interArea / unionArea;
+                if (iou > iouThreshold) {
+                    keep = false;
+                    break;
+                }
+            }
+            if (keep) kept.push(box);
+        }
+        return kept;
+    }
 
-        const targetW = 640;
-        const targetH = Math.round(640 * ((video.videoHeight || 720) / (video.videoWidth || 1280)));
-        const ctx = snapCanvas.getContext('2d');
-        snapCanvas.width = targetW;
-        snapCanvas.height = targetH;
-
-        const imageVector = [];
-        for (let i = 0; i < 5; i++) {
-            ctx.drawImage(video, 0, 0, targetW, targetH);
-            imageVector.push(snapCanvas.toDataURL('image/jpeg', 0.85));
-            await new Promise(r => setTimeout(r, 60));
+    let lastTick = performance.now();
+    
+    async function scanLoop() {
+        if (!isRunning || !yoloSession || video.readyState < 2) {
+            if (isRunning) requestAnimationFrame(scanLoop);
+            return;
         }
 
-        setStatus('● PROCESSING', 'processing');
+        // YOLO Inference throttle to max 30 FPS to prevent freezing UI
+        const now = performance.now();
+        if (now - lastTick < 33) {
+            requestAnimationFrame(scanLoop);
+            return;
+        }
+        lastTick = now;
+
+        const vw = video.videoWidth;
+        const vh = video.videoHeight;
+        
+        // Prepare 640x640 tensor input for YOLOv8
+        snapCanvas.width = 640;
+        snapCanvas.height = 640;
+        
+        // Letterbox padding calculations
+        const scale = Math.min(640 / vw, 640 / vh);
+        const nw = Math.round(vw * scale);
+        const nh = Math.round(vh * scale);
+        const dx = (640 - nw) / 2;
+        const dy = (640 - nh) / 2;
+
+        sCtx.fillStyle = '#000';
+        sCtx.fillRect(0, 0, 640, 640);
+        sCtx.drawImage(video, 0, 0, vw, vh, dx, dy, nw, nh);
+        
+        const imgData = sCtx.getImageData(0, 0, 640, 640).data;
+        const float32Data = new Float32Array(3 * 640 * 640);
+        
+        // Convert to CHW layout and normalize [0, 1]
+        for (let i = 0; i < 640 * 640; i++) {
+            float32Data[i] = imgData[i * 4] / 255.0; // R
+            float32Data[640 * 640 + i] = imgData[i * 4 + 1] / 255.0; // G
+            float32Data[2 * 640 * 640 + i] = imgData[i * 4 + 2] / 255.0; // B
+        }
+
+        const inputTensor = new ort.Tensor('float32', float32Data, [1, 3, 640, 640]);
+        
+        try {
+            const results = await yoloSession.run({ images: inputTensor });
+            const output = results.output0.data; // Float32Array shape [1, 5, 8400]
+            
+            let rawBoxes = [];
+            // YOLOv8 output: 8400 columns, each is [xc, yc, w, h, conf_class0]
+            for (let i = 0; i < 8400; i++) {
+                const conf = output[4 * 8400 + i];
+                if (conf > 0.35) {
+                    const xc = output[0 * 8400 + i];
+                    const yc = output[1 * 8400 + i];
+                    const w = output[2 * 8400 + i];
+                    const h = output[3 * 8400 + i];
+                    
+                    const x1 = xc - w / 2;
+                    const y1 = yc - h / 2;
+                    
+                    rawBoxes.push({
+                        x1, y1, x2: x1 + w, y2: y1 + h, w, h, conf, class_id: 0, class_name: 'plat_nomor'
+                    });
+                }
+            }
+            
+            const nmsBoxes = nms(rawBoxes, 0.45);
+            
+            // Convert coordinates back to original video dimensions
+            const finalBoxes = nmsBoxes.map(b => {
+                const bx = (b.x1 - dx) / scale;
+                const by = (b.y1 - dy) / scale;
+                const bw = b.w / scale;
+                const bh = b.h / scale;
+                return {
+                    x: bx, y: by, w: bw, h: bh, 
+                    label: `plat_nomor ${Math.round(b.conf * 100)}%`,
+                    class_id: b.class_id,
+                    conf: b.conf,
+                    is_registered: false // Default, will update after OCR
+                };
+            });
+            
+            drawBoxes(finalBoxes, video.videoWidth, video.videoHeight);
+            
+            if (finalBoxes.length > 0) {
+                const box = finalBoxes[0];
+                
+                // Track box stability
+                boxVector.push(box);
+                if (boxVector.length > 5) boxVector.shift();
+                
+                if (boxVector.length === 5 && !isAnalyzingOCR) {
+                    // Check if box is stable across 5 frames
+                    let isStable = true;
+                    const ref = boxVector[0];
+                    for (let i = 1; i < 5; i++) {
+                        const b = boxVector[i];
+                        // If width/height changes by > 15%, it's unstable (zooming in/out or half-cutting)
+                        if (Math.abs(b.w - ref.w) > ref.w * 0.15 || Math.abs(b.h - ref.h) > ref.h * 0.15) {
+                            isStable = false;
+                            break;
+                        }
+                    }
+                    
+                    if (isStable) {
+                        // Box is stable! Crop and send
+                        const stableBox = boxVector[4];
+                        const padX = stableBox.w * 0.25;
+                        const padY = stableBox.h * 0.25;
+                        const cx = Math.max(0, stableBox.x - padX);
+                        const cy = Math.max(0, stableBox.y - padY);
+                        const cw = Math.min(vw - cx, stableBox.w + padX * 2);
+                        const ch = Math.min(vh - cy, stableBox.h + padY * 2);
+
+                        snapCanvas.width = cw;
+                        snapCanvas.height = ch;
+                        sCtx.drawImage(video, cx, cy, cw, ch, 0, 0, cw, ch);
+                        const b64_crop = snapCanvas.toDataURL('image/jpeg', 0.90);
+
+                        doOCR(b64_crop);
+                        boxVector = []; // Wait for another 5 frames before next scan
+                    }
+                }
+            } else {
+                framesWithoutPlate++;
+                if (framesWithoutPlate > 30) {
+                    lastPlate = ""; // Reset cache so same plate can be scanned again
+                    isCurrentBoxRegistered = false;
+                    ocrHistory = []; // Clear voting history
+                    boxVector = [];
+                }
+            }
+
+            // Terminal ping every 1.5s
+            if (now - lastLogTime > 1500) {
+                if (finalBoxes.length === 0) {
+                    addLog('Mencari plat nomor...', 'info');
+                } else {
+                    addLog(`${finalBoxes.length} obj: plat_nomor`, 'info');
+                }
+                lastLogTime = now;
+            }
+
+        } catch (e) {
+            console.error("YOLO Inference Error:", e);
+        }
+
+        requestAnimationFrame(scanLoop);
+    }
+
+    async function doOCR(b64_crop) {
+        if (isAnalyzingOCR || !b64_crop) return;
+        isAnalyzingOCR = true;
+        setStatus('● EXTRACTING TEXT', 'info');
 
         try {
-            const resp = await fetch('/analyze', {
+            const resp = await fetch('/ocr_only', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ image: imageVector }),
+                body: JSON.stringify({ image: b64_crop, save_log: false }), 
             });
             const data = await resp.json();
 
             if (!data.success) {
-                addLog('Server: ' + (data.error || '?'), 'error');
+                addLog('Server OCR Error: ' + (data.error || 'Unknown'), 'error');
                 setStatus('● ERROR', 'error-status');
-                bCtx.clearRect(0, 0, boxCanvas.width, boxCanvas.height);
                 return;
             }
 
-            const FW = data.frame_size?.[0] || vw;
-            const FH = data.frame_size?.[1] || vh;
-            const boxes = data.boxes || [];
-
-            /* Always redraw boxes or clear canvas */
-            if (boxes.length > 0) {
-                drawBoxes(boxes, FW, FH);
-            } else {
-                bCtx.clearRect(0, 0, boxCanvas.width, boxCanvas.height);
-            }
-
             if (data.plate) {
-                if (data.plate === lastPlate) {
-                    // Plat yang sama, tidak perlu scan/log ulang
-                    return;
-                }
-                lastPlate = data.plate; // Simpan plat baru
-                
                 if (data.registered) {
-                    addLog(`Plate <b>${data.plate}</b> — ${data.name || ''}`, 'registered');
-                    updateInfoCard(data);
-                    setStatus('● TERDAFTAR', 'active');
+                    isCurrentBoxRegistered = true;
+                    // --- FAST PATH UNTUK PLAT TERDAFTAR ---
+                    if (data.plate !== lastPlate) {
+                        lastPlate = data.plate;
+                        await fetch('/api/log_gate', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ plate: data.plate, status: "Registered" })
+                        });
+                        addLog(`Plate <b>${data.plate}</b> — ${data.name || ''}`, 'registered');
+                        updateInfoCard(data, b64_crop);
+                        setStatus('● TERDAFTAR', 'active');
+                    }
                 } else {
-                    addLog(`Plate <b>${data.plate}</b> — Tidak Terdaftar`, 'unregistered');
-                    updateInfoCardUnregistered(data);
-                    setStatus('● TIDAK TERDAFTAR', 'error-status');
-                }
-            } else if (boxes.length > 0) {
-                const cls = [...new Set(boxes.map(b => b.class_name))].slice(0, 5).join(', ');
-                addLog(`${boxes.length} obj: ${cls}`, 'info');
-                setStatus('● SCANNING', 'active');
-            } else {
-                addLog('No objects detected.', 'info');
-                setStatus('● SCANNING', 'active');
-            }
+                    isCurrentBoxRegistered = false;
+                    // --- VOTING PATH UNTUK PLAT TIDAK TERDAFTAR ---
+                    ocrHistory.push(data.plate);
+                    if (ocrHistory.length > 3) ocrHistory.shift();
 
+                    const counts = {};
+                    let majorityPlate = null;
+                    for (const p of ocrHistory) {
+                        counts[p] = (counts[p] || 0) + 1;
+                        if (counts[p] >= 2) majorityPlate = p;
+                    }
+
+                    if (majorityPlate) {
+                        if (majorityPlate !== lastPlate) {
+                            lastPlate = majorityPlate;
+                            await fetch('/api/log_gate', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ plate: majorityPlate, status: "Unregistered" })
+                            });
+                            addLog(`Plate <b>${majorityPlate}</b> — Tidak Terdaftar`, 'unregistered');
+                            updateInfoCardUnregistered(data, b64_crop);
+                            setStatus('● TIDAK TERDAFTAR', 'error-status');
+                        }
+                    } else {
+                        addLog(`[Voting] Memastikan plat kendaraan... (${counts[data.plate] || 1}/2)`, 'info');
+                        setStatus('● REAL-TIME TRACKING', 'active');
+                    }
+                }
+            } else {
+                const failReason = data.raw_text ? `Hasil mentah: "${data.raw_text}" (Terlalu blur / tidak terbaca utuh)` : 'Gagal Membaca Teks';
+                addLog(`OCR failed: ${data.raw_text || 'Kosong'}`, 'info');
+                captureBox.innerHTML = `
+                <div class="warning-badge" style="background: #555; color: #fff; padding: 4px 8px; border-radius: 4px; font-size: 0.8rem; display: inline-block; margin-bottom: 8px;">⚠ ${failReason}</div>
+                <img src="${b64_crop}" style="max-width: 100%; border-radius: 8px; margin-top: 10px; border: 2px solid #555;" />
+                <div class="plate-number" style="color: #aaa; font-size: 1rem;">Coba dekatkan kamera</div>`;
+                setStatus('● REAL-TIME TRACKING', 'active');
+            }
         } catch (err) {
-            addLog('Network error: ' + err.message, 'error');
-            setStatus('● ERROR', 'error-status');
-            bCtx.clearRect(0, 0, boxCanvas.width, boxCanvas.height);
+            addLog('OCR Network error: ' + err.message, 'error');
         } finally {
-            isAnalyzing = false;
+            // Small cooldown before next OCR attempt
+            setTimeout(() => {
+                isAnalyzingOCR = false;
+            }, 500);
         }
     }
 
@@ -265,9 +462,9 @@
 
         for (const box of boxes) {
             const d = toDisp(box.x, box.y, box.w, box.h, FW, FH);
-            const color = box.is_registered ? '#00e676' : classColor(box.class_id);
-
-            /* Border only */
+            // isReg is true ONLY if OCR recently confirmed it
+            const isReg = isCurrentBoxRegistered;
+            const color = isReg ? '#00e676' : classColor(box.class_id);
 
             /* Glowing border */
             bCtx.shadowColor = color + 'bb';
@@ -278,7 +475,7 @@
             bCtx.shadowBlur = 0;
 
             /* Label pill */
-            const label = box.is_registered ? `✔ TERDAFTAR  ${box.label}` : box.label;
+            const label = isReg ? `✔ TERDAFTAR  ${box.label}` : box.label;
             const fs = Math.max(10, Math.min(13, d.w / 8));
             bCtx.font = `bold ${fs}px Consolas, monospace`;
             const tw = bCtx.measureText(label).width;
@@ -330,25 +527,28 @@
         termStatus.className = `term-status ${cls}`;
     }
 
-    function updateInfoCard(data) {
+    function updateInfoCard(data, b64_crop) {
         captureBox.innerHTML = `
         <div class="success-badge">✓ Terdaftar</div>
+        <img src="${b64_crop}" style="max-width: 100%; border-radius: 8px; margin-top: 10px; border: 2px solid #00e676;" />
         <div class="plate-number">${data.plate}</div>`;
         document.getElementById('val-plate').textContent = data.plate || '—';
         document.getElementById('val-name').textContent = data.name || '—';
         document.getElementById('val-time').textContent = data.scan_time || '—';
-        document.getElementById('val-acc').textContent = data.accuracy || '—';
+        document.getElementById('val-acc').textContent = 'N/A'; // N/A for crop ocr accuracy
     }
 
-    function updateInfoCardUnregistered(data) {
+    function updateInfoCardUnregistered(data, b64_crop) {
         captureBox.innerHTML = `
         <div class="warning-badge" style="background: #ff9800; color: #000; padding: 4px 8px; border-radius: 4px; font-weight: bold; font-size: 0.8rem; display: inline-block; margin-bottom: 8px;">⚠ Tidak Terdaftar</div>
+        <img src="${b64_crop}" style="max-width: 100%; border-radius: 8px; margin-top: 10px; border: 2px solid #ff9800;" />
         <div class="plate-number" style="color: #ff9800;">${data.plate}</div>`;
         document.getElementById('val-plate').textContent = data.plate || '—';
         document.getElementById('val-name').textContent = '—';
         document.getElementById('val-time').textContent = data.scan_time || '—';
-        document.getElementById('val-acc').textContent = data.accuracy || '—';
+        document.getElementById('val-acc').textContent = 'N/A';
     }
 </script>
+
 
 {% endblock %}
