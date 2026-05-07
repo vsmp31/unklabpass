@@ -314,18 +314,38 @@
                 // PERBAIKAN: Langsung capture dengan confidence >= 70%
                 // Tapi simpan ke history untuk voting (mengurangi error 1 digit)
                 if (box.conf >= 0.70) {
-                    // Crop area plat dengan padding 25%
-                    const padX = box.w * 0.25;
-                    const padY = box.h * 0.25;
-                    const cx = Math.max(0, box.x - padX);
-                    const cy = Math.max(0, box.y - padY);
-                    const cw = Math.min(vw - cx, box.w + padX * 2);
-                    const ch = Math.min(vh - cy, box.h + padY * 2);
+                    // IMPROVED CROP: Tighter padding & better centering
+                    // Padding 10% (was 25%) untuk crop lebih tight
+                    const padX = box.w * 0.10;
+                    const padY = box.h * 0.10;
+                    
+                    // Calculate crop coordinates
+                    let cx = box.x - padX;
+                    let cy = box.y - padY;
+                    let cw = box.w + padX * 2;
+                    let ch = box.h + padY * 2;
+                    
+                    // Ensure crop stays within video bounds
+                    if (cx < 0) {
+                        cw += cx;  // Reduce width if left edge is out
+                        cx = 0;
+                    }
+                    if (cy < 0) {
+                        ch += cy;  // Reduce height if top edge is out
+                        cy = 0;
+                    }
+                    if (cx + cw > vw) {
+                        cw = vw - cx;  // Clip right edge
+                    }
+                    if (cy + ch > vh) {
+                        ch = vh - cy;  // Clip bottom edge
+                    }
 
+                    // Crop with better quality (0.95 instead of 0.90)
                     snapCanvas.width = cw;
                     snapCanvas.height = ch;
                     sCtx.drawImage(video, cx, cy, cw, ch, 0, 0, cw, ch);
-                    const b64_crop = snapCanvas.toDataURL('image/jpeg', 0.90);
+                    const b64_crop = snapCanvas.toDataURL('image/jpeg', 0.95);
 
                     doOCR(b64_crop);
                 }
@@ -362,6 +382,23 @@
     async function doOCR(b64_crop) {
         if (isAnalyzingOCR || !b64_crop) return;
         isAnalyzingOCR = true;
+        
+        // ⚡ INSTANT PREVIEW: Tampilkan cropped image LANGSUNG sebelum OCR
+        captureBox.innerHTML = `
+        <div style="background: #2196F3; color: #fff; padding: 8px 16px; border-radius: 6px; font-weight: bold; font-size: 0.9rem; display: inline-block; margin-bottom: 12px; animation: pulse 1.5s infinite;">
+            ⏳ Analyzing...
+        </div>
+        <img src="${b64_crop}" style="max-width: 100%; border-radius: 8px; margin-top: 10px; border: 2px solid #2196F3; box-shadow: 0 4px 12px rgba(33,150,243,0.3);" />
+        <div class="plate-number" style="color: #2196F3; font-size: 1.5rem; margin-top: 12px;">
+            <div class="spinner" style="border: 3px solid #f3f3f3; border-top: 3px solid #2196F3; border-radius: 50%; width: 30px; height: 30px; animation: spin 1s linear infinite; margin: 0 auto;"></div>
+        </div>
+        <style>
+            @keyframes pulse {
+                0%, 100% { opacity: 1; }
+                50% { opacity: 0.6; }
+            }
+        </style>`;
+        
         setStatus('● EXTRACTING TEXT', 'info');
 
         try {
@@ -527,7 +564,10 @@
         captureBox.innerHTML = `
         <div class="success-badge">✓ Terdaftar</div>
         <img src="${b64_crop}" style="max-width: 100%; border-radius: 8px; margin-top: 10px; border: 2px solid #00e676;" />
-        <div class="plate-number">${data.plate}</div>`;
+        <div class="plate-number">${data.plate}</div>
+        <button class="rescan-btn" onclick="rescanOCR('${b64_crop}')" style="margin-top: 10px; padding: 8px 16px; background: #2196F3; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.9rem;">
+            <i class="bi bi-arrow-clockwise"></i> Re-scan
+        </button>`;
         document.getElementById('val-plate').textContent = data.plate || '—';
         document.getElementById('val-name').textContent = data.name || '—';
         document.getElementById('val-time').textContent = data.scan_time || '—';
@@ -538,12 +578,95 @@
         captureBox.innerHTML = `
         <div class="warning-badge" style="background: #f44336; color: #fff; padding: 8px 16px; border-radius: 6px; font-weight: bold; font-size: 1rem; display: inline-block; margin-bottom: 12px; box-shadow: 0 2px 8px rgba(244,67,54,0.4);">❌ TIDAK TERDAFTAR</div>
         <img src="${b64_crop}" style="max-width: 100%; border-radius: 8px; margin-top: 10px; border: 3px solid #f44336; box-shadow: 0 4px 12px rgba(244,67,54,0.3);" />
-        <div class="plate-number" style="color: #f44336; font-size: 2rem; font-weight: bold; margin-top: 12px;">${data.plate}</div>`;
+        <div class="plate-number" style="color: #f44336; font-size: 2rem; font-weight: bold; margin-top: 12px;">${data.plate}</div>
+        <button class="rescan-btn" onclick="rescanOCR('${b64_crop}')" style="margin-top: 10px; padding: 8px 16px; background: #2196F3; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.9rem;">
+            <i class="bi bi-arrow-clockwise"></i> Re-scan
+        </button>`;
         document.getElementById('val-plate').textContent = data.plate || '—';
         document.getElementById('val-name').textContent = 'TIDAK TERDAFTAR';
         document.getElementById('val-time').textContent = data.scan_time || '—';
         document.getElementById('val-acc').textContent = 'N/A';
     }
+
+    /* ═══ Re-scan OCR Function ═════════════════════════════════════════════ */
+    async function rescanOCR(b64_crop) {
+        // Show loading
+        captureBox.innerHTML = `
+        <div style="text-align: center; padding: 40px;">
+            <div class="spinner" style="border: 4px solid #f3f3f3; border-top: 4px solid #2196F3; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; margin: 0 auto;"></div>
+            <p style="margin-top: 16px; color: #999;">Re-scanning OCR...</p>
+        </div>
+        <style>
+            @keyframes spin {
+                0% { transform: rotate(0deg); }
+                100% { transform: rotate(360deg); }
+            }
+            .rescan-btn:hover {
+                background: #1976D2 !important;
+                transform: scale(1.05);
+                transition: all 0.2s;
+            }
+            .rescan-btn:active {
+                transform: scale(0.95);
+            }
+        </style>`;
+        
+        addLog('[Re-scan] Memproses ulang OCR dari cropped image...', 'info');
+        setStatus('● RE-SCANNING', 'info');
+        
+        try {
+            const resp = await fetch('/ocr_only', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ image: b64_crop, save_log: true }), 
+            });
+            const data = await resp.json();
+
+            if (!data.success) {
+                addLog('[Re-scan] Error: ' + (data.error || 'Unknown'), 'error');
+                setStatus('● ERROR', 'error-status');
+                return;
+            }
+
+            if (data.plate) {
+                // LOG: Tampilkan raw OCR untuk debugging
+                if (data.raw_text) {
+                    addLog(`[Re-scan OCR] "${data.raw_text}" → Cleaned: "${data.plate}"`, 'info');
+                }
+                
+                // Update lastPlate untuk prevent duplicate
+                lastPlate = data.plate;
+                
+                if (data.registered) {
+                    isCurrentBoxRegistered = true;
+                    addLog(`✅ [Re-scan] Plat <b>${data.plate}</b> — ${data.name || 'TERDAFTAR'}`, 'registered');
+                    updateInfoCard(data, b64_crop);
+                    setStatus('● TERDAFTAR', 'active');
+                } else {
+                    isCurrentBoxRegistered = false;
+                    addLog(`❌ [Re-scan] Plat <b>${data.plate}</b> — TIDAK TERDAFTAR`, 'unregistered');
+                    updateInfoCardUnregistered(data, b64_crop);
+                    setStatus('● TIDAK TERDAFTAR', 'error-status');
+                }
+            } else {
+                const failReason = data.raw_text ? `Raw OCR: "${data.raw_text}"` : 'OCR Kosong';
+                addLog(`❌ [Re-scan] OCR GAGAL: ${failReason}`, 'error');
+                
+                captureBox.innerHTML = `
+                <div class="warning-badge" style="background: #555; color: #fff; padding: 8px 12px; border-radius: 4px; font-size: 0.9rem; display: inline-block; margin-bottom: 8px;">⚠ ${failReason}</div>
+                <img src="${b64_crop}" style="max-width: 100%; border-radius: 8px; margin-top: 10px; border: 2px solid #555;" />
+                <div class="plate-number" style="color: #aaa; font-size: 1rem;">Gagal membaca plat</div>
+                <button class="rescan-btn" onclick="rescanOCR('${b64_crop}')" style="margin-top: 10px; padding: 8px 16px; background: #2196F3; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.9rem;">
+                    <i class="bi bi-arrow-clockwise"></i> Coba Lagi
+                </button>`;
+                setStatus('● REAL-TIME TRACKING', 'active');
+            }
+        } catch (err) {
+            addLog('[Re-scan] Network error: ' + err.message, 'error');
+            setStatus('● ERROR', 'error-status');
+        }
+    }
+
 </script>
 
 

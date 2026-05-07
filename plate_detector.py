@@ -178,44 +178,36 @@ def _prep_variants(crop: np.ndarray) -> list[np.ndarray]:
     # --- Dynamic Illumination Adaptation ---
     mean_brightness = np.mean(gray)
     if mean_brightness < 80:
-        # Terlalu gelap (malam hari) -> Terapkan Gamma Correction untuk menerangkan
+        # Terlalu gelap -> Gamma correction
         gamma = 1.5
         invGamma = 1.0 / gamma
         table = np.array([((i / 255.0) ** invGamma) * 255 for i in np.arange(0, 256)]).astype("uint8")
         gray = cv2.LUT(gray, table)
     elif mean_brightness > 200:
-        # Terlalu silau (glare) -> Terapkan Thresholding untuk meredam putih
+        # Terlalu silau -> Threshold
         _, gray = cv2.threshold(gray, 200, 255, cv2.THRESH_TRUNC)
         
-    # SPEED: Resize 600px (dari 800px) untuk balance speed & accuracy
+    # SPEED: Resize 600px (balance speed & accuracy)
     h, w = gray.shape[:2]
     if w < 600:
         scale = 600 / w
-        gray = cv2.resize(gray, (0, 0), fx=scale, fy=scale, interpolation=cv2.INTER_LANCZOS4)
+        gray = cv2.resize(gray, (0, 0), fx=scale, fy=scale, interpolation=cv2.INTER_LINEAR)
     
-    # SPEED: Denoise cepat
-    denoised = cv2.fastNlMeansDenoising(gray, None, h=7, templateWindowSize=5, searchWindowSize=15)
+    # SKIP DENOISE - Too slow! Let OCR handle noise
     
-    # Morphological operations untuk perbaiki karakter
-    kernel_rect = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
-    kernel_sharp = np.array([[-1,-1,-1],[-1,9,-1],[-1,-1,-1]])
-        
-    # SPEED: Hanya 2 variants terbaik (dari 5)
-    # V1: CLAHE + sharpen (terbaik untuk berbagai kondisi)
-    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(4,4))
-    clahe_img = clahe.apply(denoised)
+    # SPEED: ONLY 1 variant - CLAHE (best for most cases)
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+    clahe_img = clahe.apply(gray)
+    
+    # Light sharpen
+    kernel_sharp = np.array([[0,-1,0],[-1,5,-1],[0,-1,0]])
     v1 = cv2.filter2D(clahe_img, -1, kernel_sharp)
-    v1 = cv2.morphologyEx(v1, cv2.MORPH_CLOSE, kernel_rect)
     
-    # V2: Adaptive threshold (bagus untuk lighting tidak merata)
-    v2 = cv2.adaptiveThreshold(denoised, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
-    v2 = cv2.morphologyEx(v2, cv2.MORPH_CLOSE, kernel_rect)
-    
-    return [v1, v2]  # Hanya 2 variants untuk SPEED!
+    return [v1]  # ONLY 1 variant for SPEED!
 
 def ocr_frame(img: np.ndarray) -> tuple[str, str, float]:
     """
-    Jalankan EasyOCR pada frame dengan 4 preprocessing variant
+    Jalankan EasyOCR pada frame dengan 5 preprocessing variant
     Returns: (cleaned_text, raw_text, confidence)
     """
     reader = get_reader()
@@ -223,38 +215,32 @@ def ocr_frame(img: np.ndarray) -> tuple[str, str, float]:
     best_conf = 0.0
     best_raw = ""
     
-    # Character confusion mapping (common OCR mistakes)
-    confusion_map = {
-        '0': ['O', 'D', 'Q'],
-        'O': ['0', 'D', 'Q'],
-        '1': ['I', 'L', '7'],
-        'I': ['1', 'L', '7'],
-        '8': ['B', '3', '6'],
-        'B': ['8', '3', '6'],
-        '5': ['S', '6'],
-        'S': ['5', '6'],
-        '2': ['Z'],
-        'Z': ['2'],
-    }
-    
     all_candidates = []  # Store all possible readings
     
-    for variant in _prep_variants(img):
+    for idx, variant in enumerate(_prep_variants(img)):
         result = reader.readtext(
             variant,
             allowlist="ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ",
-            detail=1, paragraph=False,
+            detail=1, 
+            paragraph=False,
+            # SPEED: Higher thresholds for faster processing
+            min_size=10,          # Larger text only (was 5)
+            text_threshold=0.6,   # Higher threshold (was 0.5)
+            low_text=0.4,         # Higher threshold (was 0.3)
         )
+        
+        # REMOVED: Debug logging (too verbose, slows down)
+            
         if not result:
             continue
             
         avg_conf = sum(r[2] for r in result) / len(result)
-        raw = " ".join(r[1] for r in result if r[2] >= 0.10).strip()
+        raw = " ".join(r[1] for r in result if r[2] >= 0.05).strip()  # Lower dari 0.10 ke 0.05
         
-        # PERBAIKAN: Regex STRICT - minimal 3 angka!
+        # PERBAIKAN: Regex FLEXIBLE - terima 2-4 angka (karena digit bisa hilang)
         patterns = [
-            r"([A-Z]{1,2})\s*(\d{3,4})\s*([A-Z]{1,3})",  # DB 1482 WD (STRICT: 3-4 angka)
-            r"([A-Z]{2})[\s\-]*(\d{3,4})[\s\-]*([A-Z]{1,2})",  # Dengan dash
+            r"([A-Z]{1,2})\s*(\d{2,4})\s*([A-Z]{1,3})",  # FLEXIBLE: 2-4 angka (was 3-4)
+            r"([A-Z]{2})[\s\-]*(\d{2,4})[\s\-]*([A-Z]{1,2})",  # Dengan dash
         ]
         
         for pattern in patterns:
@@ -263,52 +249,48 @@ def ocr_frame(img: np.ndarray) -> tuple[str, str, float]:
                 # Gabungkan tanpa spasi
                 candidate = "".join(g for g in match.groups() if g)
                 
-                # VALIDASI: Pastikan ada minimal 3 angka
+                # VALIDASI: Pastikan ada minimal 2 angka (was 3)
                 digit_count = sum(c.isdigit() for c in candidate)
-                if digit_count >= 3:  # Minimal 3 angka
+                if digit_count >= 2:  # Minimal 2 angka (toleran untuk missing digit)
                     all_candidates.append({
                         'text': candidate,
                         'conf': avg_conf,
-                        'raw': raw.upper()
+                        'raw': raw.upper(),
+                        'digit_count': digit_count
                     })
                     
-                    if avg_conf > best_conf:
+                    # Prioritas: lebih banyak digit = lebih baik
+                    if digit_count > sum(c.isdigit() for c in best_text):
+                        best_text = candidate
+                        best_conf = avg_conf
+                        best_raw = raw.upper()
+                    elif digit_count == sum(c.isdigit() for c in best_text) and avg_conf > best_conf:
                         best_text = candidate
                         best_conf = avg_conf
                         best_raw = raw.upper()
                 break
     
-    # PERBAIKAN: Jika ada multiple candidates, pilih yang paling konsisten
+    # PERBAIKAN: Pilih candidate dengan digit terbanyak dan confidence tertinggi
     if len(all_candidates) > 1:
-        # Group similar candidates (dengan toleransi 1-2 karakter berbeda)
-        from collections import Counter
+        # Sort by digit count (descending), then by confidence (descending)
+        all_candidates.sort(key=lambda c: (c['digit_count'], c['conf']), reverse=True)
         
-        # Extract number part untuk comparison
-        number_parts = []
-        for c in all_candidates:
-            # Extract angka dari plat (misal: DB1482WD -> 1482)
-            nums = re.findall(r'\d+', c['text'])
-            if nums:
-                number_parts.append((nums[0], c))
+        # Ambil candidate terbaik
+        best_candidate = all_candidates[0]
+        best_text = best_candidate['text']
+        best_conf = best_candidate['conf']
+        best_raw = best_candidate['raw']
         
-        if number_parts:
-            # Cari angka yang paling sering muncul
-            num_counter = Counter([n[0] for n in number_parts])
-            most_common_num = num_counter.most_common(1)[0][0]
-            
-            # Pilih candidate dengan angka paling umum dan confidence tertinggi
-            best_candidate = max(
-                [c for n, c in number_parts if n == most_common_num],
-                key=lambda x: x['conf']
-            )
-            best_text = best_candidate['text']
-            best_conf = best_candidate['conf']
-            best_raw = best_candidate['raw']
-            
+        # Log top candidate only (not all 3)
+        log.info(f"[OCR] Best: {best_text} (digits={best_candidate['digit_count']}, conf={best_conf:.2f})")
+    
+    # REMOVED FALLBACK - Too slow! Accept result or fail fast
+    
     if best_text:
-        log.info(f"[OCR] Cleaned plate: {best_text} (conf: {best_conf:.2f}, raw: {best_raw}, candidates: {len(all_candidates)})")
+        digit_count = sum(c.isdigit() for c in best_text)
+        log.info(f"[OCR] Final: {best_text} (digits={digit_count}, conf={best_conf:.2f})")
     else:
-        log.warning(f"[OCR] Failed to extract plate. Raw: {best_raw}")
+        log.warning(f"[OCR] Failed. Raw: {best_raw}")
         
     return best_text, best_raw, best_conf
 
@@ -453,18 +435,14 @@ def analyze_crop(b64_image: str, lecturers: list[dict]) -> dict:
     img = decode_b64(b64_image)
     if img is None:
         return {"found": False, "raw_text": ""}
-        
-    # Resize image to standard width (400px) to help OCR
-    h, w = img.shape[:2]
-    if w > 0 and w < 400:
-        new_w = 400
-        new_h = int(h * (new_w / w))
-        img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_CUBIC)
-
-    # --- ROI Cropping: Buang 20% bagian bawah (area tanggal pajak) ---
-    h_new = img.shape[0]
-    img = img[:int(h_new * 0.80), :]
-
+    
+    # CRITICAL: Jangan resize di sini! Biarkan _prep_variants yang handle
+    # Cropped image sudah optimal dari YOLO, langsung process saja
+    
+    # REMOVED: ROI Cropping 20% - Ini bisa hilangkan text penting!
+    # Cropped image dari YOLO sudah fokus ke plat, tidak perlu crop lagi
+    
+    # Direct OCR tanpa pre-processing tambahan
     ocr_text, raw_text, conf = ocr_frame(img)
     matched = match_plate(ocr_text, lecturers) if ocr_text else None
     
