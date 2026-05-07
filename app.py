@@ -674,6 +674,71 @@ def api_delete_vehicle(plate):
         logging.error(f"[DB] Error deleting vehicle: {e}")
         return jsonify({"success": False, "error": "Database error"}), 500
 
+@app.route("/api/logs", methods=["DELETE"])
+@login_required
+@rate_limit(max_requests=5, window_seconds=60)
+def api_delete_logs():
+    """
+    DELETE /api/logs - Hapus logs berdasarkan filter
+    Query params:
+    - all: hapus semua logs (true/false)
+    - date_from: hapus logs dari tanggal
+    - date_to: hapus logs sampai tanggal
+    - plat_nomor: hapus logs untuk plat tertentu
+    """
+    try:
+        delete_all = request.args.get('all', '').lower() == 'true'
+        date_from = request.args.get('date_from', '').strip()
+        date_to = request.args.get('date_to', '').strip()
+        plat_nomor = request.args.get('plat_nomor', '').strip()
+        
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        
+        if delete_all:
+            # Hapus semua logs
+            cur.execute("DELETE FROM gate_logs")
+            deleted = cur.rowcount
+            conn.commit()
+            conn.close()
+            logging.info(f"[DB] All logs deleted ({deleted} rows) by {session.get('username')}")
+            return jsonify({"success": True, "deleted": deleted, "message": f"Berhasil menghapus {deleted} logs"})
+        
+        # Build WHERE clause
+        where_conditions = []
+        params = []
+        
+        if date_from:
+            where_conditions.append("DATE(entry_time) >= ?")
+            params.append(date_from)
+        
+        if date_to:
+            where_conditions.append("DATE(entry_time) <= ?")
+            params.append(date_to)
+        
+        if plat_nomor:
+            where_conditions.append("plat_nomor = ?")
+            params.append(plat_nomor.upper())
+        
+        if not where_conditions:
+            return jsonify({"success": False, "error": "No filter specified"}), 400
+        
+        where_clause = " AND ".join(where_conditions)
+        query = f"DELETE FROM gate_logs WHERE {where_clause}"
+        
+        cur.execute(query, params)
+        deleted = cur.rowcount
+        conn.commit()
+        conn.close()
+        
+        logging.info(f"[DB] Logs deleted ({deleted} rows) by {session.get('username')} with filter: {where_clause}")
+        return jsonify({"success": True, "deleted": deleted, "message": f"Berhasil menghapus {deleted} logs"})
+        
+    except Exception as e:
+        logging.exception("Error in /api/logs DELETE")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 @app.route("/api/logs", methods=["GET"])
 @login_required
 @rate_limit(max_requests=30, window_seconds=60)

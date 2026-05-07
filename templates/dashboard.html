@@ -100,6 +100,30 @@
         </div>
     </div>
 
+    <!-- ─── Modal: Clear Logs Confirmation ──────────────────────────────────── -->
+    <div class="modal-overlay hidden" id="clear-logs-modal">
+        <div class="modal-container modal-container-small">
+            <div class="modal-header">
+                <h3 class="modal-title">⚠️ Konfirmasi Hapus Semua Logs</h3>
+                <button class="modal-close-btn" id="btn-close-clear-logs-modal">
+                    <i class="bi bi-x-lg"></i>
+                </button>
+            </div>
+            <div class="modal-body">
+                <p class="delete-message" style="color: #f44336; font-weight: bold;">
+                    Yakin ingin menghapus <strong>SEMUA LOGS</strong>?
+                </p>
+                <p style="font-size: 0.9rem; color: #999; margin-top: 8px;">
+                    Tindakan ini tidak dapat dibatalkan!
+                </p>
+            </div>
+            <div class="modal-footer">
+                <button id="btn-cancel-clear-logs" class="modal-btn modal-btn-secondary">Batal</button>
+                <button id="btn-confirm-clear-logs" class="modal-btn modal-btn-danger">Hapus Semua</button>
+            </div>
+        </div>
+    </div>
+
     <!-- ─── Right Panel: Real-Time Logs ────────────────────────────────────── -->
     <div class="panel">
         <div class="logs-header">
@@ -216,6 +240,10 @@
                         </div>
                     </div>
                 </div>
+                
+                <button id="btn-clear-all-logs" class="action-icon-btn" title="Clear all logs" style="color: #f44336;">
+                    <i class="bi bi-trash"></i>
+                </button>
                 
                 <button id="btn-refresh-logs" class="action-icon-btn" title="Refresh logs">
                     <i class="bi bi-arrow-clockwise"></i>
@@ -557,6 +585,46 @@ document.getElementById('btn-refresh-logs').addEventListener('click', function()
             this.classList.remove('spinning');
         }, 600);
     });
+});
+
+// ═══ Clear All Logs Handler ═══════════════════════════════════════════════
+const clearLogsModal = document.getElementById('clear-logs-modal');
+const btnClearAllLogs = document.getElementById('btn-clear-all-logs');
+const btnCloseClearLogsModal = document.getElementById('btn-close-clear-logs-modal');
+const btnCancelClearLogs = document.getElementById('btn-cancel-clear-logs');
+const btnConfirmClearLogs = document.getElementById('btn-confirm-clear-logs');
+
+// Open clear logs modal
+btnClearAllLogs.addEventListener('click', () => {
+    clearLogsModal.classList.remove('hidden');
+});
+
+// Close clear logs modal
+[btnCloseClearLogsModal, btnCancelClearLogs].forEach(btn => {
+    btn.addEventListener('click', () => {
+        clearLogsModal.classList.add('hidden');
+    });
+});
+
+// Confirm clear all logs
+btnConfirmClearLogs.addEventListener('click', async () => {
+    try {
+        const resp = await fetch('/api/logs?all=true', {
+            method: 'DELETE'
+        });
+        const data = await resp.json();
+        
+        if (data.success) {
+            showToast(`✅ ${data.message}`, 'success');
+            clearLogsModal.classList.add('hidden');
+            loadLogs(1, '', {});  // Reload logs
+        } else {
+            showToast(`❌ Error: ${data.error}`, 'error');
+        }
+    } catch (err) {
+        showToast('❌ Network error', 'error');
+        console.error(err);
+    }
 });
 
 /* ─── Dropdown Toggle Handlers ──────────────────────────────────────────── */

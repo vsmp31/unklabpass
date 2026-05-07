@@ -99,10 +99,9 @@
     let isCurrentBoxRegistered = false; // Flag to color box accurately
     let framesWithoutPlate = 0;
     let lastLogTime = 0;
-    let ocrHistory = []; // Array to store recent OCR reads for Majority Voting
-    let boxVector = []; // Array to validate YOLO box stability
     let yoloSession = null;
     let registeredPlates = new Set(); // To color boxes instantly
+    let currentBoxes = []; // Store boxes untuk update OCR text
 
     /* ═══ 20-color YOLO palette ══════════════════════════════════════════════════ */
     const PALETTE = [
@@ -272,7 +271,7 @@
             // YOLOv8 output: 8400 columns, each is [xc, yc, w, h, conf_class0]
             for (let i = 0; i < 8400; i++) {
                 const conf = output[4 * 8400 + i];
-                if (conf > 0.35) {
+                if (conf > 0.70) {  // 70% untuk gate system - balance antara speed & accuracy
                     const xc = output[0 * 8400 + i];
                     const yc = output[1 * 8400 + i];
                     const w = output[2 * 8400 + i];
@@ -300,58 +299,46 @@
                     label: `plat_nomor ${Math.round(b.conf * 100)}%`,
                     class_id: b.class_id,
                     conf: b.conf,
-                    is_registered: false // Default, will update after OCR
+                    is_registered: false, // Default, will update after OCR
+                    ocrText: null // Will be filled after OCR
                 };
             });
             
+            currentBoxes = finalBoxes; // Store untuk update nanti
             drawBoxes(finalBoxes, video.videoWidth, video.videoHeight);
             
-            if (finalBoxes.length > 0) {
+            if (finalBoxes.length > 0 && !isAnalyzingOCR) {
                 const box = finalBoxes[0];
+                framesWithoutPlate = 0; // Reset counter
                 
-                // Track box stability
-                boxVector.push(box);
-                if (boxVector.length > 5) boxVector.shift();
-                
-                if (boxVector.length === 5 && !isAnalyzingOCR) {
-                    // Check if box is stable across 5 frames
-                    let isStable = true;
-                    const ref = boxVector[0];
-                    for (let i = 1; i < 5; i++) {
-                        const b = boxVector[i];
-                        // If width/height changes by > 15%, it's unstable (zooming in/out or half-cutting)
-                        if (Math.abs(b.w - ref.w) > ref.w * 0.15 || Math.abs(b.h - ref.h) > ref.h * 0.15) {
-                            isStable = false;
-                            break;
-                        }
-                    }
-                    
-                    if (isStable) {
-                        // Box is stable! Crop and send
-                        const stableBox = boxVector[4];
-                        const padX = stableBox.w * 0.25;
-                        const padY = stableBox.h * 0.25;
-                        const cx = Math.max(0, stableBox.x - padX);
-                        const cy = Math.max(0, stableBox.y - padY);
-                        const cw = Math.min(vw - cx, stableBox.w + padX * 2);
-                        const ch = Math.min(vh - cy, stableBox.h + padY * 2);
+                // PERBAIKAN: Langsung capture dengan confidence >= 70%
+                // Tapi simpan ke history untuk voting (mengurangi error 1 digit)
+                if (box.conf >= 0.70) {
+                    // Crop area plat dengan padding 25%
+                    const padX = box.w * 0.25;
+                    const padY = box.h * 0.25;
+                    const cx = Math.max(0, box.x - padX);
+                    const cy = Math.max(0, box.y - padY);
+                    const cw = Math.min(vw - cx, box.w + padX * 2);
+                    const ch = Math.min(vh - cy, box.h + padY * 2);
 
-                        snapCanvas.width = cw;
-                        snapCanvas.height = ch;
-                        sCtx.drawImage(video, cx, cy, cw, ch, 0, 0, cw, ch);
-                        const b64_crop = snapCanvas.toDataURL('image/jpeg', 0.90);
+                    snapCanvas.width = cw;
+                    snapCanvas.height = ch;
+                    sCtx.drawImage(video, cx, cy, cw, ch, 0, 0, cw, ch);
+                    const b64_crop = snapCanvas.toDataURL('image/jpeg', 0.90);
 
-                        doOCR(b64_crop);
-                        boxVector = []; // Wait for another 5 frames before next scan
-                    }
+                    doOCR(b64_crop);
                 }
             } else {
                 framesWithoutPlate++;
-                if (framesWithoutPlate > 30) {
+                // Reset cepat (10 frames = 0.33 detik) agar bisa scan plat berikutnya
+                if (framesWithoutPlate > 10) {
+                    if (lastPlate) {
+                        addLog(`Plat ${lastPlate} keluar dari frame. Siap scan plat berikutnya.`, 'info');
+                    }
                     lastPlate = ""; // Reset cache so same plate can be scanned again
                     isCurrentBoxRegistered = false;
                     ocrHistory = []; // Clear voting history
-                    boxVector = [];
                 }
             }
 
@@ -392,66 +379,68 @@
             }
 
             if (data.plate) {
-                if (data.registered) {
-                    isCurrentBoxRegistered = true;
-                    // --- FAST PATH UNTUK PLAT TERDAFTAR ---
-                    if (data.plate !== lastPlate) {
-                        lastPlate = data.plate;
+                framesWithoutPlate = 0; // Reset counter karena plat terdeteksi
+                
+                // UPDATE: Tampilkan OCR result di kotak
+                if (currentBoxes.length > 0) {
+                    currentBoxes[0].ocrText = data.plate;
+                    drawBoxes(currentBoxes, video.videoWidth, video.videoHeight);
+                }
+                
+                // LOG: Tampilkan raw OCR untuk debugging
+                if (data.raw_text) {
+                    addLog(`[OCR RAW] "${data.raw_text}" → Cleaned: "${data.plate}"`, 'info');
+                }
+                
+                // SIMPLE & FAST: Langsung tampilkan hasil OCR (NO VOTING!)
+                if (data.plate !== lastPlate) {
+                    lastPlate = data.plate;
+                    
+                    if (data.registered) {
+                        isCurrentBoxRegistered = true;
                         await fetch('/api/log_gate', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({ plate: data.plate, status: "Registered" })
                         });
-                        addLog(`Plate <b>${data.plate}</b> — ${data.name || ''}`, 'registered');
+                        addLog(`✅ Plat <b>${data.plate}</b> — ${data.name || 'TERDAFTAR'}`, 'registered');
                         updateInfoCard(data, b64_crop);
                         setStatus('● TERDAFTAR', 'active');
-                    }
-                } else {
-                    isCurrentBoxRegistered = false;
-                    // --- VOTING PATH UNTUK PLAT TIDAK TERDAFTAR ---
-                    ocrHistory.push(data.plate);
-                    if (ocrHistory.length > 3) ocrHistory.shift();
-
-                    const counts = {};
-                    let majorityPlate = null;
-                    for (const p of ocrHistory) {
-                        counts[p] = (counts[p] || 0) + 1;
-                        if (counts[p] >= 2) majorityPlate = p;
-                    }
-
-                    if (majorityPlate) {
-                        if (majorityPlate !== lastPlate) {
-                            lastPlate = majorityPlate;
-                            await fetch('/api/log_gate', {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ plate: majorityPlate, status: "Unregistered" })
-                            });
-                            addLog(`Plate <b>${majorityPlate}</b> — Tidak Terdaftar`, 'unregistered');
-                            updateInfoCardUnregistered(data, b64_crop);
-                            setStatus('● TIDAK TERDAFTAR', 'error-status');
-                        }
                     } else {
-                        addLog(`[Voting] Memastikan plat kendaraan... (${counts[data.plate] || 1}/2)`, 'info');
-                        setStatus('● REAL-TIME TRACKING', 'active');
+                        isCurrentBoxRegistered = false;
+                        await fetch('/api/log_gate', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ plate: data.plate, status: "Unregistered" })
+                        });
+                        addLog(`❌ Plat <b>${data.plate}</b> — TIDAK TERDAFTAR`, 'unregistered');
+                        updateInfoCardUnregistered(data, b64_crop);
+                        setStatus('● TIDAK TERDAFTAR', 'error-status');
                     }
                 }
             } else {
-                const failReason = data.raw_text ? `Hasil mentah: "${data.raw_text}" (Terlalu blur / tidak terbaca utuh)` : 'Gagal Membaca Teks';
-                addLog(`OCR failed: ${data.raw_text || 'Kosong'}`, 'info');
+                const failReason = data.raw_text ? `Raw OCR: "${data.raw_text}"` : 'OCR Kosong';
+                addLog(`❌ OCR GAGAL: ${failReason}`, 'error');
+                
+                // Tampilkan raw text di kotak untuk debugging
+                if (currentBoxes.length > 0) {
+                    currentBoxes[0].ocrText = data.raw_text || "GAGAL";
+                    drawBoxes(currentBoxes, video.videoWidth, video.videoHeight);
+                }
+                
                 captureBox.innerHTML = `
-                <div class="warning-badge" style="background: #555; color: #fff; padding: 4px 8px; border-radius: 4px; font-size: 0.8rem; display: inline-block; margin-bottom: 8px;">⚠ ${failReason}</div>
+                <div class="warning-badge" style="background: #555; color: #fff; padding: 8px 12px; border-radius: 4px; font-size: 0.9rem; display: inline-block; margin-bottom: 8px;">⚠ ${failReason}</div>
                 <img src="${b64_crop}" style="max-width: 100%; border-radius: 8px; margin-top: 10px; border: 2px solid #555;" />
-                <div class="plate-number" style="color: #aaa; font-size: 1rem;">Coba dekatkan kamera</div>`;
+                <div class="plate-number" style="color: #aaa; font-size: 1rem;">Coba dekatkan kamera atau perbaiki pencahayaan</div>`;
                 setStatus('● REAL-TIME TRACKING', 'active');
             }
         } catch (err) {
             addLog('OCR Network error: ' + err.message, 'error');
         } finally {
-            // Small cooldown before next OCR attempt
+            // Cooldown singkat sebelum OCR berikutnya (200ms untuk gate system)
             setTimeout(() => {
                 isAnalyzingOCR = false;
-            }, 500);
+            }, 200);
         }
     }
 
@@ -474,8 +463,15 @@
             bCtx.strokeRect(d.x, d.y, d.w, d.h);
             bCtx.shadowBlur = 0;
 
-            /* Label pill */
-            const label = isReg ? `✔ TERDAFTAR  ${box.label}` : box.label;
+            /* Label pill - TAMPILKAN OCR RESULT DI KOTAK */
+            let label = box.label;
+            if (box.ocrText) {
+                // Jika ada hasil OCR, tampilkan di kotak
+                label = isReg ? `✔ ${box.ocrText}` : `${box.ocrText}`;
+            } else if (isReg) {
+                label = `✔ TERDAFTAR  ${box.label}`;
+            }
+            
             const fs = Math.max(10, Math.min(13, d.w / 8));
             bCtx.font = `bold ${fs}px Consolas, monospace`;
             const tw = bCtx.measureText(label).width;
@@ -540,11 +536,11 @@
 
     function updateInfoCardUnregistered(data, b64_crop) {
         captureBox.innerHTML = `
-        <div class="warning-badge" style="background: #ff9800; color: #000; padding: 4px 8px; border-radius: 4px; font-weight: bold; font-size: 0.8rem; display: inline-block; margin-bottom: 8px;">⚠ Tidak Terdaftar</div>
-        <img src="${b64_crop}" style="max-width: 100%; border-radius: 8px; margin-top: 10px; border: 2px solid #ff9800;" />
-        <div class="plate-number" style="color: #ff9800;">${data.plate}</div>`;
+        <div class="warning-badge" style="background: #f44336; color: #fff; padding: 8px 16px; border-radius: 6px; font-weight: bold; font-size: 1rem; display: inline-block; margin-bottom: 12px; box-shadow: 0 2px 8px rgba(244,67,54,0.4);">❌ TIDAK TERDAFTAR</div>
+        <img src="${b64_crop}" style="max-width: 100%; border-radius: 8px; margin-top: 10px; border: 3px solid #f44336; box-shadow: 0 4px 12px rgba(244,67,54,0.3);" />
+        <div class="plate-number" style="color: #f44336; font-size: 2rem; font-weight: bold; margin-top: 12px;">${data.plate}</div>`;
         document.getElementById('val-plate').textContent = data.plate || '—';
-        document.getElementById('val-name').textContent = '—';
+        document.getElementById('val-name').textContent = 'TIDAK TERDAFTAR';
         document.getElementById('val-time').textContent = data.scan_time || '—';
         document.getElementById('val-acc').textContent = 'N/A';
     }

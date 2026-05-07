@@ -187,34 +187,57 @@ def _prep_variants(crop: np.ndarray) -> list[np.ndarray]:
         # Terlalu silau (glare) -> Terapkan Thresholding untuk meredam putih
         _, gray = cv2.threshold(gray, 200, 255, cv2.THRESH_TRUNC)
         
-    # Ensure minimum width for OCR
+    # SPEED: Resize 600px (dari 800px) untuk balance speed & accuracy
     h, w = gray.shape[:2]
-    if w < 400:
-        scale = 400 / w
+    if w < 600:
+        scale = 600 / w
         gray = cv2.resize(gray, (0, 0), fx=scale, fy=scale, interpolation=cv2.INTER_LANCZOS4)
+    
+    # SPEED: Denoise cepat
+    denoised = cv2.fastNlMeansDenoising(gray, None, h=7, templateWindowSize=5, searchWindowSize=15)
+    
+    # Morphological operations untuk perbaiki karakter
+    kernel_rect = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
+    kernel_sharp = np.array([[-1,-1,-1],[-1,9,-1],[-1,-1,-1]])
         
-    # V1: sharpen
-    kernel = np.array([[-1,-1,-1],[-1,9,-1],[-1,-1,-1]])
-    v1 = cv2.filter2D(gray, -1, kernel)
+    # SPEED: Hanya 2 variants terbaik (dari 5)
+    # V1: CLAHE + sharpen (terbaik untuk berbagai kondisi)
+    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(4,4))
+    clahe_img = clahe.apply(denoised)
+    v1 = cv2.filter2D(clahe_img, -1, kernel_sharp)
+    v1 = cv2.morphologyEx(v1, cv2.MORPH_CLOSE, kernel_rect)
     
-    # V2: Otsu binary
-    _, v2 = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY+cv2.THRESH_OTSU)
+    # V2: Adaptive threshold (bagus untuk lighting tidak merata)
+    v2 = cv2.adaptiveThreshold(denoised, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
+    v2 = cv2.morphologyEx(v2, cv2.MORPH_CLOSE, kernel_rect)
     
-    # V3: CLAHE + sharpen
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(4,4))
-    v3 = cv2.filter2D(clahe.apply(gray), -1, kernel)
-    
-    return [v1, v2, v3]
+    return [v1, v2]  # Hanya 2 variants untuk SPEED!
 
 def ocr_frame(img: np.ndarray) -> tuple[str, str, float]:
     """
-    Jalankan EasyOCR pada frame dengan 3 preprocessing variant
+    Jalankan EasyOCR pada frame dengan 4 preprocessing variant
     Returns: (cleaned_text, raw_text, confidence)
     """
     reader = get_reader()
     best_text = ""
     best_conf = 0.0
     best_raw = ""
+    
+    # Character confusion mapping (common OCR mistakes)
+    confusion_map = {
+        '0': ['O', 'D', 'Q'],
+        'O': ['0', 'D', 'Q'],
+        '1': ['I', 'L', '7'],
+        'I': ['1', 'L', '7'],
+        '8': ['B', '3', '6'],
+        'B': ['8', '3', '6'],
+        '5': ['S', '6'],
+        'S': ['5', '6'],
+        '2': ['Z'],
+        'Z': ['2'],
+    }
+    
+    all_candidates = []  # Store all possible readings
     
     for variant in _prep_variants(img):
         result = reader.readtext(
@@ -228,15 +251,64 @@ def ocr_frame(img: np.ndarray) -> tuple[str, str, float]:
         avg_conf = sum(r[2] for r in result) / len(result)
         raw = " ".join(r[1] for r in result if r[2] >= 0.10).strip()
         
-        # Regex plat nomor Indonesia umum: 1-2 huruf depan, 1-4 angka, 0-3 huruf belakang
-        match = re.search(r"([A-Z]{1,2})\s*(\d{1,4})\s*([A-Z]{0,3})", raw.upper())
-        if match and avg_conf > best_conf:
-            best_text = "".join(g for g in match.groups() if g).strip()
-            best_conf = avg_conf
-            best_raw = raw.upper()
+        # PERBAIKAN: Regex STRICT - minimal 3 angka!
+        patterns = [
+            r"([A-Z]{1,2})\s*(\d{3,4})\s*([A-Z]{1,3})",  # DB 1482 WD (STRICT: 3-4 angka)
+            r"([A-Z]{2})[\s\-]*(\d{3,4})[\s\-]*([A-Z]{1,2})",  # Dengan dash
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, raw.upper())
+            if match:
+                # Gabungkan tanpa spasi
+                candidate = "".join(g for g in match.groups() if g)
+                
+                # VALIDASI: Pastikan ada minimal 3 angka
+                digit_count = sum(c.isdigit() for c in candidate)
+                if digit_count >= 3:  # Minimal 3 angka
+                    all_candidates.append({
+                        'text': candidate,
+                        'conf': avg_conf,
+                        'raw': raw.upper()
+                    })
+                    
+                    if avg_conf > best_conf:
+                        best_text = candidate
+                        best_conf = avg_conf
+                        best_raw = raw.upper()
+                break
+    
+    # PERBAIKAN: Jika ada multiple candidates, pilih yang paling konsisten
+    if len(all_candidates) > 1:
+        # Group similar candidates (dengan toleransi 1-2 karakter berbeda)
+        from collections import Counter
+        
+        # Extract number part untuk comparison
+        number_parts = []
+        for c in all_candidates:
+            # Extract angka dari plat (misal: DB1482WD -> 1482)
+            nums = re.findall(r'\d+', c['text'])
+            if nums:
+                number_parts.append((nums[0], c))
+        
+        if number_parts:
+            # Cari angka yang paling sering muncul
+            num_counter = Counter([n[0] for n in number_parts])
+            most_common_num = num_counter.most_common(1)[0][0]
+            
+            # Pilih candidate dengan angka paling umum dan confidence tertinggi
+            best_candidate = max(
+                [c for n, c in number_parts if n == most_common_num],
+                key=lambda x: x['conf']
+            )
+            best_text = best_candidate['text']
+            best_conf = best_candidate['conf']
+            best_raw = best_candidate['raw']
             
     if best_text:
-        log.info(f"[OCR] Cleaned DB plate: {best_text} (conf: {best_conf:.2f}, raw: {best_raw})")
+        log.info(f"[OCR] Cleaned plate: {best_text} (conf: {best_conf:.2f}, raw: {best_raw}, candidates: {len(all_candidates)})")
+    else:
+        log.warning(f"[OCR] Failed to extract plate. Raw: {best_raw}")
         
     return best_text, best_raw, best_conf
 
