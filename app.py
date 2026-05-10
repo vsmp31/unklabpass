@@ -1,11 +1,14 @@
 from flask import Flask, render_template, request, jsonify, session, redirect, url_for
 import sqlite3
+import re
 from werkzeug.security import generate_password_hash, check_password_hash
 import time
 import os
 import glob
 import logging
+from collections import defaultdict
 from functools import wraps
+from threading import Lock
 from datetime import datetime, timedelta
 
 from plate_detector import analyze_frame_from_img, select_sharpest_frames, decode_b64, analyze_crop
@@ -13,21 +16,31 @@ from plate_detector import analyze_frame_from_img, select_sharpest_frames, decod
 # Setup logging untuk monitoring sistem
 logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
 
-app = Flask(__name__)
-app.secret_key = os.getenv("SECRET_KEY", "scanvec-unklabpass-2026")
-
 # ═══ Konfigurasi Environment-based ═════════════════════════════════════════
 FLASK_ENV = os.getenv("FLASK_ENV", "development")
 IS_PRODUCTION = FLASK_ENV == "production"
+
+# ═══ Flask App (single instance) ═══════════════════════════════════════════
+app = Flask(__name__)
+
+# Warn if using the insecure default secret key in production
+_secret_key = os.getenv("SECRET_KEY", "")
+if not _secret_key:
+    if IS_PRODUCTION:
+        raise RuntimeError("SECRET_KEY environment variable must be set in production!")
+    _secret_key = "scanvec-unklabpass-2026-dev-only"
+    logging.warning("[SECURITY] Using default SECRET_KEY. Set SECRET_KEY env var for production.")
+app.secret_key = _secret_key
 
 # ═══ Security Configuration ════════════════════════════════════════════════
 # Session timeout (30 menit inactivity)
 app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(minutes=30)
 
-# ═══ Rate Limiting (Simple in-memory) ══════════════════════════════════════
-from collections import defaultdict
-from threading import Lock
+# ═══ Konfigurasi Auto-reload & Cache ═══════════════════════════════════════
+app.config["TEMPLATES_AUTO_RELOAD"] = not IS_PRODUCTION
+app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0 if not IS_PRODUCTION else 31536000
 
+# ═══ Rate Limiting (Simple in-memory) ══════════════════════════════════════
 rate_limit_storage = defaultdict(list)
 rate_limit_lock = Lock()
 
@@ -42,22 +55,22 @@ def rate_limit(max_requests=10, window_seconds=60):
         def wrapped(*args, **kwargs):
             if not IS_PRODUCTION:
                 return f(*args, **kwargs)
-                
+
             # Get client IP
             client_ip = request.headers.get('X-Forwarded-For', request.remote_addr)
             if ',' in client_ip:
                 client_ip = client_ip.split(',')[0].strip()
-            
+
             now = time.time()
             key = f"{f.__name__}:{client_ip}"
-            
+
             with rate_limit_lock:
                 # Clean old requests
                 rate_limit_storage[key] = [
                     req_time for req_time in rate_limit_storage[key]
                     if now - req_time < window_seconds
                 ]
-                
+
                 # Check limit
                 if len(rate_limit_storage[key]) >= max_requests:
                     logging.warning(f"[RATE LIMIT] {client_ip} exceeded limit for {f.__name__}")
@@ -65,10 +78,10 @@ def rate_limit(max_requests=10, window_seconds=60):
                         "success": False,
                         "error": "Too many requests. Please try again later."
                     }), 429
-                
+
                 # Add current request
                 rate_limit_storage[key].append(now)
-            
+
             return f(*args, **kwargs)
         return wrapped
     return decorator
@@ -82,7 +95,7 @@ def login_required(f):
             if request.is_json:
                 return jsonify({"success": False, "error": "Unauthorized"}), 401
             return redirect(url_for("login"))
-        
+
         # Update last activity
         session["last_activity"] = datetime.now().isoformat()
         return f(*args, **kwargs)
@@ -93,22 +106,21 @@ def check_session_timeout():
     if session.get("logged_in"):
         last_activity = session.get("last_activity")
         if last_activity:
-            last_time = datetime.fromisoformat(last_activity)
-            if datetime.now() - last_time > timedelta(minutes=30):
+            try:
+                last_time = datetime.fromisoformat(last_activity)
+                if datetime.now() - last_time > timedelta(minutes=30):
+                    session.clear()
+                    return True
+            except (ValueError, TypeError):
+                # Malformed timestamp — clear session to be safe
                 session.clear()
                 return True
     return False
 
-app = Flask(__name__)
-app.secret_key = os.getenv("SECRET_KEY", "scanvec-unklabpass-2026")
-
-# ═══ Konfigurasi Environment-based ═════════════════════════════════════════
-FLASK_ENV = os.getenv("FLASK_ENV", "development")
-IS_PRODUCTION = FLASK_ENV == "production"
-
-# ═══ Konfigurasi Auto-reload & Cache ═══════════════════════════════════════
-app.config["TEMPLATES_AUTO_RELOAD"] = not IS_PRODUCTION
-app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0 if not IS_PRODUCTION else 31536000
+# ═══ Plate format validation ════════════════════════════════════════════════
+# Accepts any Indonesian plate: 1-2 letters + 1-4 digits + 0-3 letters
+# e.g. DB1234ABC, B1234XYZ, DK123A
+PLATE_RE = re.compile(r'^[A-Z]{1,2}\d{1,4}[A-Z]{0,3}$')
 
 @app.before_request
 def before_request():
@@ -483,34 +495,41 @@ def clear():
 @rate_limit(max_requests=60, window_seconds=60)
 def api_log_gate():
     """
-    Simpan plat nomor yang sudah dikonfirmasi secara final (Majority Voting) ke database
+    Simpan plat nomor yang sudah dikonfirmasi secara final ke database.
+    Hanya plat Registered yang dicatat ke gate_logs.
     """
     try:
         data = request.get_json(force=True)
         plate_to_log = data.get("plate", "").upper().strip()
         status = data.get("status", "Unregistered")
-        
+
         if not plate_to_log:
             return jsonify({"success": False, "error": "No plate provided"}), 400
-            
+
+        # Hanya log kendaraan yang terdaftar
+        if status != "Registered":
+            return jsonify({"success": True, "logged": False, "reason": "Unregistered plates are not logged"})
+
         scan_time = time.strftime("%Y-%m-%d %H:%M:%S")
         conn = sqlite3.connect(DB_PATH)
         cur = conn.cursor()
-        
-        # Cooldown check
+
+        # Cooldown check: skip jika plat sama dengan log terakhir
         cur.execute("SELECT plat_nomor FROM gate_logs ORDER BY entry_time DESC LIMIT 1")
         last_logged = cur.fetchone()
-        
+
+        logged = False
         if not last_logged or last_logged[0] != plate_to_log:
             cur.execute(
                 "INSERT INTO gate_logs (plat_nomor, entry_time) VALUES (?, ?)",
                 (plate_to_log, scan_time)
             )
             conn.commit()
-            
+            logged = True
+
         conn.close()
-        return jsonify({"success": True, "logged": True})
-        
+        return jsonify({"success": True, "logged": logged})
+
     except Exception as e:
         logging.exception("Error in /api/log_gate")
         return jsonify({"success": False, "error": str(e)}), 500
@@ -578,11 +597,10 @@ def api_add_vehicle():
     
     if len(plate) > 15 or len(name) > 100:
         return jsonify({"success": False, "error": "Input too long"}), 400
-    
-    # Validate plate format (DB + numbers + optional letters)
-    import re
-    if not re.match(r'^DB\d{1,4}[A-Z]{0,3}$', plate):
-        return jsonify({"success": False, "error": "Invalid plate format. Use: DB1234ABC"}), 400
+
+    # Validate plate format (1-2 letters + 1-4 digits + 0-3 letters)
+    if not PLATE_RE.match(plate):
+        return jsonify({"success": False, "error": "Format plat tidak valid. Contoh: DB1234ABC, B1234XYZ"}), 400
         
     try:
         conn = sqlite3.connect(DB_PATH)
@@ -622,11 +640,10 @@ def api_update_vehicle():
     
     if len(new_plate) > 15 or len(name) > 100:
         return jsonify({"success": False, "error": "Input too long"}), 400
-    
+
     # Validate plate format
-    import re
-    if not re.match(r'^DB\d{1,4}[A-Z]{0,3}$', new_plate):
-        return jsonify({"success": False, "error": "Invalid plate format"}), 400
+    if not PLATE_RE.match(new_plate):
+        return jsonify({"success": False, "error": "Format plat tidak valid. Contoh: DB1234ABC, B1234XYZ"}), 400
         
     try:
         conn = sqlite3.connect(DB_PATH)
@@ -651,11 +668,10 @@ def api_delete_vehicle(plate):
     """
     global CACHE_VEHICLES
     plate = plate.replace(" ", "").upper()
-    
+
     # Validate plate format
-    import re
-    if not re.match(r'^DB\d{1,4}[A-Z]{0,3}$', plate):
-        return jsonify({"success": False, "error": "Invalid plate format"}), 400
+    if not PLATE_RE.match(plate):
+        return jsonify({"success": False, "error": "Format plat tidak valid"}), 400
     
     try:
         conn = sqlite3.connect(DB_PATH)

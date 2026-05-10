@@ -1,5 +1,22 @@
 venv/
 .vscode/
 __pycache__/
-__pycache__
-C:\Users\gilbert\Documents\gilbert\scanvec\__pycache__
+*.pyc
+*.pyo
+*.pyd
+
+# Database (contains real data — do not commit)
+data/vehicles.db
+
+# Environment variables
+.env
+.env.*
+
+# Model weights (large binary files)
+model/best.pt
+model/yolov8n.pt
+static/model/best.onnx
+
+# OS artifacts
+.DS_Store
+Thumbs.db

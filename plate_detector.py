@@ -388,7 +388,8 @@ def analyze_frame_from_img(img: np.ndarray, lecturers: list[dict]) -> dict:
             # Crop region plat
             crop_img = img[y1:y2, x1:x2]
             if crop_img.size > 0:
-                text = ocr_frame(crop_img)
+                # ocr_frame returns (cleaned_text, raw_text, confidence)
+                text, _raw, _conf = ocr_frame(crop_img)
                 if text:
                     # Cek apakah plat ini match dengan database
                     m = match_plate(text, lecturers)
@@ -402,7 +403,7 @@ def analyze_frame_from_img(img: np.ndarray, lecturers: list[dict]) -> dict:
                         
     else:
         # Fallback: OCR full frame jika YOLO tidak deteksi plat
-        ocr_text = ocr_frame(img)
+        ocr_text, _raw, _conf = ocr_frame(img)
         if ocr_text:
             matched = match_plate(ocr_text, lecturers)
 
