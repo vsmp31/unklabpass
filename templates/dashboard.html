@@ -26,6 +26,34 @@
                         </div>
                     </div>
                 </div>
+
+                <!-- Testing Mode Toggle -->
+                <div class="action-btn-wrapper">
+                    <button id="btn-testing-mode" class="action-icon-btn testing-mode-btn" title="Testing Mode: semua plat otomatis terdaftar">
+                        <i class="bi bi-bug"></i>
+                    </button>
+                    <!-- Testing Mode Dropdown -->
+                    <div class="dropdown-popup hidden" id="testing-mode-dropdown" style="min-width: 280px;">
+                        <div style="display:flex; align-items:center; gap:10px; margin-bottom:12px;">
+                            <i class="bi bi-bug" style="font-size:1.2rem; color: var(--warning);"></i>
+                            <span style="font-weight:600; font-size:0.95rem;">Testing Mode</span>
+                            <!-- Toggle Switch -->
+                            <label class="test-toggle-switch" style="margin-left:auto;">
+                                <input type="checkbox" id="testing-mode-checkbox">
+                                <span class="test-toggle-slider"></span>
+                            </label>
+                        </div>
+                        <p style="font-size:0.78rem; color:var(--text-tertiary); line-height:1.5; margin-bottom:12px;">
+                            Semua plat yang terdeteksi akan otomatis terdaftar dengan nama random <code style="background:var(--bg-tertiary);padding:1px 4px;border-radius:3px;">[TEST]</code>.
+                        </p>
+                        <div id="testing-mode-status" style="font-size:0.8rem; font-weight:600; margin-bottom:12px; color:var(--text-tertiary);">
+                            Status: <span id="test-status-text">NONAKTIF</span>
+                        </div>
+                        <button id="btn-clear-test-data" class="filter-btn filter-btn-clear" style="width:100%; margin-top:4px;">
+                            <i class="bi bi-trash"></i> Hapus Semua Data Test
+                        </button>
+                    </div>
+                </div>
                 
                 <button id="btn-add-vehicle-modal" class="add-vehicle-btn">
                     <i class="bi bi-plus-lg"></i>
@@ -64,7 +92,10 @@
                 <div class="modal-form">
                     <div class="form-group">
                         <label class="form-label">Plat Nomor</label>
-                        <input type="text" id="input-plate" placeholder="DB1234A" class="form-input" autocomplete="off">
+                        <input type="text" id="input-plate" placeholder="DB1234AB" class="form-input" autocomplete="off">
+                        <span style="font-size: 0.75rem; color: var(--text-tertiary); margin-top: 4px;">
+                            Format: DB1234A · DB1234AB · DB1234ABC · B1234XY
+                        </span>
                     </div>
                     <div class="form-group">
                         <label class="form-label">Nama Pemilik</label>
@@ -529,7 +560,10 @@ async function loadLogs(page = currentPage, search = '', filters = {}) {
                     </div>
                     ${isReg ? `
                     <div class="log-owner">
-                        <i class="bi bi-person-badge"></i> ${log.name}
+                        <i class="bi bi-person-badge"></i>
+                        ${log.name && log.name.startsWith('[TEST] ')
+                            ? `${log.name.slice(7)} <span style="font-size:0.7rem;opacity:0.55;background:var(--warning);color:#000;padding:1px 5px;border-radius:3px;margin-left:4px;">TEST</span>`
+                            : log.name}
                     </div>
                     ` : ''}
                 </div>
@@ -932,6 +966,92 @@ function showMsg(text, typeClass) {
     setTimeout(() => { crudMsg.className = 'toast-notification'; }, 3000);
 }
 
+/* ─── Testing Mode ───────────────────────────────────────────────────────── */
+const btnTestingMode    = document.getElementById('btn-testing-mode');
+const testingDropdown   = document.getElementById('testing-mode-dropdown');
+const testingCheckbox   = document.getElementById('testing-mode-checkbox');
+const testStatusText    = document.getElementById('test-status-text');
+const btnClearTestData  = document.getElementById('btn-clear-test-data');
+
+// Load current state from server on page load
+async function loadTestingModeState() {
+    try {
+        const resp = await fetch('/api/testing_mode');
+        const data = await resp.json();
+        applyTestingModeUI(data.testing_mode);
+    } catch (e) { /* ignore */ }
+}
+
+function applyTestingModeUI(enabled) {
+    testingCheckbox.checked = enabled;
+    testStatusText.textContent = enabled ? 'AKTIF' : 'NONAKTIF';
+    testStatusText.style.color = enabled ? 'var(--warning)' : 'var(--text-tertiary)';
+    btnTestingMode.style.color = enabled ? 'var(--warning)' : '';
+    btnTestingMode.style.borderColor = enabled ? 'var(--warning)' : '';
+    btnTestingMode.title = enabled
+        ? 'Testing Mode: AKTIF — klik untuk kelola'
+        : 'Testing Mode: NONAKTIF — klik untuk aktifkan';
+}
+
+// Toggle dropdown
+btnTestingMode.addEventListener('click', (e) => {
+    e.stopPropagation();
+    testingDropdown.classList.toggle('hidden');
+});
+
+// Close when clicking outside
+document.addEventListener('click', (e) => {
+    if (!testingDropdown.contains(e.target) && !btnTestingMode.contains(e.target)) {
+        testingDropdown.classList.add('hidden');
+    }
+});
+
+// Toggle switch handler
+testingCheckbox.addEventListener('change', async () => {
+    const enabled = testingCheckbox.checked;
+    try {
+        const resp = await fetch('/api/testing_mode', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ enabled })
+        });
+        const data = await resp.json();
+        if (data.success) {
+            applyTestingModeUI(data.testing_mode);
+            showMsg(
+                data.testing_mode
+                    ? '🧪 Testing Mode AKTIF — semua plat otomatis terdaftar'
+                    : '✅ Testing Mode NONAKTIF',
+                data.testing_mode ? 'toast-warning' : 'toast-success'
+            );
+        }
+    } catch (e) {
+        showMsg('Gagal mengubah Testing Mode', 'toast-error');
+        testingCheckbox.checked = !enabled; // revert
+    }
+});
+
+// Clear test data handler
+btnClearTestData.addEventListener('click', async () => {
+    if (!confirm('Hapus semua kendaraan [TEST] dan logs terkait?')) return;
+    try {
+        const resp = await fetch('/api/testing_mode/clear', { method: 'POST' });
+        const data = await resp.json();
+        if (data.success) {
+            showMsg(`🗑️ ${data.message}`, 'toast-success');
+            testingDropdown.classList.add('hidden');
+            loadVehicles();
+            loadLogs(1, '', {});
+        } else {
+            showMsg('Gagal: ' + data.error, 'toast-error');
+        }
+    } catch (e) {
+        showMsg('Network error', 'toast-error');
+    }
+});
+
+loadTestingModeState();
+
 /* ─── Init & Polling ─────────────────────────────────────────────────────── */
 loadVehicles();
 loadLogs();
@@ -940,14 +1060,8 @@ loadLogs();
 let logsPollingInterval = null;
 
 function startLogsPolling() {
-    // Clear existing interval if any
-    if (logsPollingInterval) {
-        clearInterval(logsPollingInterval);
-    }
-    
-    // Poll every 10 seconds (reduced from 2 seconds)
+    if (logsPollingInterval) clearInterval(logsPollingInterval);
     logsPollingInterval = setInterval(() => {
-        // Only poll if page is visible
         if (!document.hidden) {
             loadLogs(currentPage, logsSearchQuery, activeFilters);
         }
@@ -961,20 +1075,17 @@ function stopLogsPolling() {
     }
 }
 
-// Start polling
 startLogsPolling();
 
-// Pause polling when page is hidden, resume when visible
 document.addEventListener('visibilitychange', () => {
     if (document.hidden) {
         stopLogsPolling();
     } else {
-        loadLogs(currentPage, logsSearchQuery, activeFilters); // Refresh immediately when page becomes visible
+        loadLogs(currentPage, logsSearchQuery, activeFilters);
         startLogsPolling();
     }
 });
 
-// Stop polling when user leaves page
 window.addEventListener('beforeunload', stopLogsPolling);
 
 </script>

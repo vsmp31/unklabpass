@@ -440,9 +440,13 @@
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({ plate: data.plate, status: "Registered" })
                         });
-                        addLog(`✅ Plat <b>${data.plate}</b> — ${data.name || 'TERDAFTAR'}`, 'registered');
+                        // Terminal log: tampilkan badge 🧪 kalau test mode
+                        const termLabel = data.is_test
+                            ? `🧪 <b>${data.plate}</b> — ${data.name} <span style="opacity:0.5;font-size:0.8em;">[TEST]</span>`
+                            : `<b>${data.plate}</b> — ${data.name || 'TERDAFTAR'}`;
+                        addLog(`✅ Plat ${termLabel}`, 'registered');
                         updateInfoCard(data, b64_crop);
-                        setStatus('● TERDAFTAR', 'active');
+                        setStatus(data.is_test ? '● TEST: TERDAFTAR' : '● TERDAFTAR', 'active');
                     } else {
                         isCurrentBoxRegistered = false;
                         await fetch('/api/log_gate', {

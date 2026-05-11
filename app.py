@@ -118,9 +118,14 @@ def check_session_timeout():
     return False
 
 # ═══ Plate format validation ════════════════════════════════════════════════
-# Accepts any Indonesian plate: 1-2 letters + 1-4 digits + 0-3 letters
-# e.g. DB1234ABC, B1234XYZ, DK123A
+# Format plat Indonesia: 1-2 huruf prefix + 1-4 digit + 0-3 huruf suffix
+# Contoh valid: DB1234A, DB1234AB, DB1234ABC, B1234XY, DK123, DB1216EJ
 PLATE_RE = re.compile(r'^[A-Z]{1,2}\d{1,4}[A-Z]{0,3}$')
+
+PLATE_FORMAT_ERROR = (
+    "Format plat tidak valid. "
+    "Contoh: DB1234A · DB1234AB · DB1234ABC · B1234XY · DK123"
+)
 
 @app.before_request
 def before_request():
@@ -239,6 +244,31 @@ def verify_indexes():
         logging.warning(f"[DB] ⚠️  Hanya {count} indexes ditemukan. Seharusnya minimal 3.")
 
 verify_indexes()
+
+# ═══ Testing Mode ══════════════════════════════════════════════════════════
+# Kalau aktif: setiap plat yang terdeteksi tapi belum terdaftar akan
+# otomatis di-register ke database dengan nama "[TEST] <random>".
+# State disimpan di RAM — reset ke False kalau server restart.
+TESTING_MODE: bool = False
+
+# Pool nama random untuk testing
+import random as _random
+_TEST_NAMES = [
+    "James", "John", "Robert", "Michael", "William",
+    "David", "Richard", "Joseph", "Thomas", "Charles",
+    "Mary", "Patricia", "Jennifer", "Linda", "Barbara",
+    "Susan", "Jessica", "Sarah", "Karen", "Lisa",
+    "Daniel", "Matthew", "Anthony", "Mark", "Donald",
+    "Steven", "Paul", "Andrew", "Joshua", "Kenneth",
+    "Kevin", "Brian", "George", "Timothy", "Ronald",
+    "Edward", "Jason", "Jeffrey", "Ryan", "Jacob",
+    "Gary", "Nicholas", "Eric", "Jonathan", "Stephen",
+    "Larry", "Justin", "Scott", "Brandon", "Benjamin",
+]
+
+def _random_test_name() -> str:
+    # Prefix hanya disimpan di DB untuk keperluan clear, tidak ditampilkan di UI
+    return f"[TEST] {_random.choice(_TEST_NAMES)}"
 
 # ═══ In-Memory Cache untuk Lookup Cepat O(1) ═══════════════════════════════
 CACHE_VEHICLES = []
@@ -428,8 +458,9 @@ def analyze():
 def ocr_only():
     """
     API khusus untuk OCR. Menerima gambar plat hasil cropping dari Client-Side YOLO.
-    Mengembalikan data plat dan lecturer jika cocok.
+    Kalau Testing Mode aktif: plat yang belum terdaftar otomatis di-register dengan nama random.
     """
+    global CACHE_VEHICLES
     try:
         data = request.get_json(force=True)
         b64_image = data.get("image", "")
@@ -438,19 +469,37 @@ def ocr_only():
 
         vehicles = load_vehicles()
         scan_time = time.strftime("%Y-%m-%d %H:%M:%S")
-        
+
         result = analyze_crop(b64_image, vehicles)
-        
-        # Log to DB if registered (or explicitly requested)
+
+        # ── Testing Mode: auto-register plat baru ──────────────────────────
+        if TESTING_MODE and result["found"] and result["plate"] and not result["registered"]:
+            plate_new = result["plate"].upper().strip()
+            test_name = _random_test_name()
+            try:
+                conn = sqlite3.connect(DB_PATH)
+                conn.execute(
+                    "INSERT OR IGNORE INTO vehicles (plat_nomor, nama_pemilik) VALUES (?, ?)",
+                    (plate_new, test_name)
+                )
+                conn.commit()
+                conn.close()
+                CACHE_VEHICLES = []  # Invalidate cache
+                # Re-run matching dengan data terbaru
+                vehicles = load_vehicles()
+                result["registered"] = True
+                result["lecturer"]   = {"plate": plate_new, "name": test_name}
+                logging.info(f"[TEST] Auto-registered: {plate_new} → {test_name}")
+            except Exception as e:
+                logging.error(f"[TEST] Failed to auto-register {plate_new}: {e}")
+
+        # ── Log ke gate_logs ───────────────────────────────────────────────
         if result["found"] and result["plate"] and data.get("save_log", False):
             plate_to_log = result["plate"]
             conn = sqlite3.connect(DB_PATH)
             cur = conn.cursor()
-            
-            # Cooldown check
             cur.execute("SELECT plat_nomor FROM gate_logs ORDER BY entry_time DESC LIMIT 1")
             last_logged = cur.fetchone()
-            
             if not last_logged or last_logged[0] != plate_to_log:
                 cur.execute(
                     "INSERT INTO gate_logs (plat_nomor, entry_time) VALUES (?, ?)",
@@ -460,24 +509,27 @@ def ocr_only():
             conn.close()
 
         base = {
-            "success":    True,
-            "found":      result["found"],
-            "registered": result["registered"],
-            "plate":      result["plate"],
-            "raw_text":   result.get("raw_text", ""),
-            "scan_time":  scan_time,
+            "success":     True,
+            "found":       result["found"],
+            "registered":  result["registered"],
+            "plate":       result["plate"],
+            "raw_text":    result.get("raw_text", ""),
+            "scan_time":   scan_time,
+            "test_mode":   TESTING_MODE,
         }
-        
+
         if result["registered"] and result["lecturer"]:
             vehicle = result["lecturer"]
             session["detected"]  = vehicle
             session["scan_time"] = scan_time
-            base.update({
-                "name": vehicle.get("name", "—"),
-            })
+            # Strip [TEST] prefix from display name — prefix stays in DB for cleanup
+            display_name = vehicle.get("name", "—")
+            if display_name.startswith("[TEST] "):
+                display_name = display_name[7:]
+            base.update({"name": display_name, "is_test": vehicle.get("name", "").startswith("[TEST] ")})
 
         return jsonify(base)
-        
+
     except Exception as e:
         logging.exception("Error in /ocr_only")
         return jsonify({"success": False, "error": str(e)}), 500
@@ -489,6 +541,79 @@ def clear():
     """Clear session data"""
     session.clear()
     return jsonify({"success": True})
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TESTING MODE ENDPOINTS
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.route("/api/testing_mode", methods=["GET"])
+@login_required
+def api_get_testing_mode():
+    """GET status testing mode saat ini"""
+    return jsonify({"testing_mode": TESTING_MODE})
+
+
+@app.route("/api/testing_mode", methods=["POST"])
+@login_required
+def api_set_testing_mode():
+    """
+    POST /api/testing_mode — toggle testing mode on/off
+    Body: {"enabled": true/false}
+    """
+    global TESTING_MODE
+    data = request.get_json(force=True)
+    enabled = bool(data.get("enabled", False))
+    TESTING_MODE = enabled
+    logging.info(f"[TEST] Testing mode {'ENABLED' if enabled else 'DISABLED'} by {session.get('username')}")
+    return jsonify({"success": True, "testing_mode": TESTING_MODE})
+
+
+@app.route("/api/testing_mode/clear", methods=["POST"])
+@login_required
+def api_clear_test_data():
+    """
+    Hapus semua data test (vehicles dengan nama '[TEST]' prefix)
+    dan semua gate_logs yang terkait.
+    """
+    global CACHE_VEHICLES
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+
+        # Ambil semua plat test
+        cur.execute("SELECT plat_nomor FROM vehicles WHERE nama_pemilik LIKE '[TEST]%'")
+        test_plates = [r[0] for r in cur.fetchall()]
+
+        if test_plates:
+            placeholders = ",".join("?" * len(test_plates))
+            # Hapus logs terkait
+            cur.execute(f"DELETE FROM gate_logs WHERE plat_nomor IN ({placeholders})", test_plates)
+            logs_deleted = cur.rowcount
+            # Hapus vehicles test
+            cur.execute(f"DELETE FROM vehicles WHERE plat_nomor IN ({placeholders})", test_plates)
+            vehicles_deleted = cur.rowcount
+        else:
+            logs_deleted = 0
+            vehicles_deleted = 0
+
+        conn.commit()
+        conn.close()
+        CACHE_VEHICLES = []  # Invalidate cache
+
+        logging.info(
+            f"[TEST] Cleared {vehicles_deleted} test vehicles & {logs_deleted} logs "
+            f"by {session.get('username')}"
+        )
+        return jsonify({
+            "success": True,
+            "vehicles_deleted": vehicles_deleted,
+            "logs_deleted": logs_deleted,
+            "message": f"Berhasil hapus {vehicles_deleted} kendaraan test dan {logs_deleted} logs"
+        })
+    except Exception as e:
+        logging.exception("Error in /api/testing_mode/clear")
+        return jsonify({"success": False, "error": str(e)}), 500
 
 
 @app.route("/api/log_gate", methods=["POST"])
@@ -600,7 +725,7 @@ def api_add_vehicle():
 
     # Validate plate format (1-2 letters + 1-4 digits + 0-3 letters)
     if not PLATE_RE.match(plate):
-        return jsonify({"success": False, "error": "Format plat tidak valid. Contoh: DB1234ABC, B1234XYZ"}), 400
+        return jsonify({"success": False, "error": PLATE_FORMAT_ERROR}), 400
         
     try:
         conn = sqlite3.connect(DB_PATH)
@@ -643,7 +768,7 @@ def api_update_vehicle():
 
     # Validate plate format
     if not PLATE_RE.match(new_plate):
-        return jsonify({"success": False, "error": "Format plat tidak valid. Contoh: DB1234ABC, B1234XYZ"}), 400
+        return jsonify({"success": False, "error": PLATE_FORMAT_ERROR}), 400
         
     try:
         conn = sqlite3.connect(DB_PATH)
@@ -671,7 +796,7 @@ def api_delete_vehicle(plate):
 
     # Validate plate format
     if not PLATE_RE.match(plate):
-        return jsonify({"success": False, "error": "Format plat tidak valid"}), 400
+        return jsonify({"success": False, "error": PLATE_FORMAT_ERROR}), 400
     
     try:
         conn = sqlite3.connect(DB_PATH)
