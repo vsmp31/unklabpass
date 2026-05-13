@@ -14,13 +14,13 @@
 
     <!-- ─── Navbar ──────────────────────────────────────────────────────── -->
     {% if page == 'dashboard' %}
-    <!-- Dashboard Navbar -->
-    <nav class="up-nav dashboard-nav" role="navigation" aria-label="Dashboard navigation">
+    <!-- Admin Panel Navbar -->
+    <nav class="up-nav dashboard-nav" role="navigation" aria-label="Admin panel navigation">
         <div class="up-nav-links">
             <a href="/" class="back-to-home-btn" title="Kembali ke Home">
                 <i class="bi bi-house-door-fill"></i>
             </a>
-            <span class="dashboard-title">Dashboard</span>
+            <span class="dashboard-title">Admin Panel</span>
         </div>
         <div class="up-brand">
             <div class="user-menu">
@@ -50,7 +50,7 @@
     <nav class="up-nav" role="navigation" aria-label="Main navigation">
         <div class="up-nav-links">
             <a id="nav-home"  class="up-nav-link {% if page == 'home'  %}active{% endif %}" href="/">Monitoring</a>
-            <a id="nav-dash"  class="up-nav-link {% if page == 'dashboard' %}active{% endif %}" href="/dashboard">Dashboard</a>
+            <a id="nav-dash"  class="up-nav-link {% if page == 'dashboard' %}active{% endif %}" href="/dashboard">Admin Panel</a>
             <a id="nav-about" class="up-nav-link {% if page == 'about' %}active{% endif %}" href="/about">About</a>
             {% if session.get('logged_in') %}
             <a class="up-nav-link" style="color:var(--error-alt); font-weight:bold; margin-left:15px;" href="/logout">
@@ -108,7 +108,7 @@
             }
         }
         
-        // Dashboard user menu functionality
+        // Admin panel user menu functionality
         const userMenuToggle = document.getElementById('user-menu-toggle');
         const userDropdown = document.getElementById('user-dropdown');
         const themeToggleDropdown = document.getElementById('theme-toggle-dropdown');
